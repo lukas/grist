@@ -1,0 +1,80 @@
+import { spawn } from "node:child_process";
+import type { ToolContext, ToolResult } from "./toolTypes.js";
+
+function isAllowed(command: string, allowlist: string[]): boolean {
+  const c = command.trim();
+  for (const entry of allowlist) {
+    if (c === entry || c.startsWith(entry + " ")) return true;
+  }
+  return false;
+}
+
+function runWithTimeout(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  abortSignal: AbortSignal | undefined
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, { cwd, shell: true, env: process.env });
+    let stdout = "";
+    let stderr = "";
+    const t = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ code: 124, stdout, stderr: stderr + "\n[timeout]" });
+    }, timeoutMs);
+    child.stdout?.on("data", (d) => (stdout += d.toString()));
+    child.stderr?.on("data", (d) => (stderr += d.toString()));
+    const onAbort = () => {
+      child.kill("SIGTERM");
+    };
+    abortSignal?.addEventListener("abort", onAbort);
+    child.on("error", (err) => {
+      clearTimeout(t);
+      abortSignal?.removeEventListener("abort", onAbort);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(t);
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+export async function toolRunCommandSafe(
+  ctx: ToolContext,
+  args: { command: string; cwd?: string; timeoutMs?: number },
+  abortSignal?: AbortSignal
+): Promise<ToolResult> {
+  const timeoutMs = args.timeoutMs ?? 60_000;
+  const cwd = args.cwd ? args.cwd : ctx.repoPath;
+  if (!isAllowed(args.command, ctx.commandAllowlist)) {
+    return { ok: false, error: `Command not in allowlist: ${args.command}` };
+  }
+  try {
+    const r = await runWithTimeout(args.command, cwd, timeoutMs, abortSignal);
+    return { ok: true, data: r };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function toolRunTests(
+  ctx: ToolContext,
+  args: { command?: string; target?: string; cwd?: string },
+  abortSignal?: AbortSignal
+): Promise<ToolResult> {
+  const cmd = args.command || "npm test";
+  const cwd = args.cwd ?? ctx.repoPath;
+  return toolRunCommandSafe(ctx, { command: cmd, cwd, timeoutMs: 120_000 }, abortSignal);
+}
+
+export async function toolRunLint(
+  ctx: ToolContext,
+  args: { command?: string },
+  abortSignal?: AbortSignal
+): Promise<ToolResult> {
+  const cmd = args.command || "npm run lint";
+  return toolRunCommandSafe(ctx, { command: cmd, timeoutMs: 120_000 }, abortSignal);
+}

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "outDir": "dist-types",
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@backend/*": ["backend/*"],
+      "@shared/*": ["shared/*"]
+    }
+  },
+  "include": ["backend/**/*.ts", "electron/**/*.ts", "shared/**/*.ts", "frontend/src/**/*.ts", "frontend/src/**/*.tsx", "vitest.config.ts"]
+}
