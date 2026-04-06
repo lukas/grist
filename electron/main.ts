@@ -1,9 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, existsSync } from "node:fs";
 import { openDatabase, closeDatabase } from "../backend/db/db.js";
+import { loadDotenvFile } from "../backend/settings/loadDotenv.js";
 import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { IPC } from "../shared/ipc.js";
 import { getSetting, setSetting, loadAppSettings, saveAppSettingsPatch } from "../backend/settings/appSettings.js";
@@ -148,6 +148,11 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  const envPath = loadDotenvFile([join(__dirname, "..", ".env")]);
+  if (envPath) {
+    console.log("[grist] loaded env file:", envPath);
+  }
+
   const dbPath = join(app.getPath("userData"), "grist.sqlite");
   mkdirSync(dirname(dbPath), { recursive: true });
   openDatabase(dbPath);

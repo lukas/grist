@@ -8,6 +8,7 @@ Repository: [github.com/lukas/grist](https://github.com/lukas/grist)
 
 ```bash
 npm install
+cp .env.example .env   # optional: local secrets (gitignored); set GRIST_KIMI_* etc.
 npm test              # vitest + preload bundle checks + on macOS: Electron smoke (`SMOKE_OK`)
 npm run test:electron-smoke   # only the Electron preload check (also runs inside npm test on macOS)
 npm run dev             # UI: http://localhost:5173 + Electron window
@@ -34,6 +35,7 @@ Default model provider is **mock** (no API keys). Set providers under **Provider
 | 2026-04-06 | **grV0 scaffold:** SQLite jobs/tasks/artifacts/events/settings; template planner (4× analysis + reducer); scheduler with concurrency 4, stall + duplicate-tool hints; worker structured JSON loop; reducer + verifier passes; full tool surface (repo, scratchpad, artifacts, execution with allowlist, worktree patch tools); providers: mock, Claude, Codex (OpenAI API), Kimi (OpenAI-compatible); Electron IPC + React Mission Control / tasks / detail / findings / events / patch table; `openPath` for Finder; vitest for deps, DB insert, allowlist. |
 | 2026-04-06 | **Dev UX:** `@electron/rebuild` + `rebuild:electron` before Electron; `pretest` / `test:watch` rebuild `better-sqlite3` for system Node so tests and Electron both work. |
 | 2026-04-06 | **Product name:** shipped as **Grist** (npm package `grist`, DB file `grist.sqlite`). Older `swarm.sqlite` is not migrated automatically. |
+| 2026-04-06 | **`.env`:** gitignored repo-root `.env` loaded on startup; `GRIST_KIMI_*` + `GRIST_DEFAULT_PROVIDER`; DB settings override env when set. |
 
 ## Spec
 

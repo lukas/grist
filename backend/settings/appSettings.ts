@@ -1,5 +1,6 @@
 import { getAllSettings, getSetting, setSetting } from "../db/settingsRepo.js";
 import type { ModelProviderName } from "../types/models.js";
+import { envSettingsDefaults } from "./envMerge.js";
 
 export interface AppSettings {
   anthropicApiKey?: string;
@@ -20,22 +21,31 @@ export interface AppSettings {
 
 const DEFAULT_ALLOWLIST = ["npm test", "pnpm test", "yarn test", "make test", "pytest", "go test ./..."];
 
+function pick<T>(dbVal: T | undefined, envVal: T | undefined): T | undefined {
+  if (dbVal !== undefined && dbVal !== null && dbVal !== "") return dbVal as T;
+  return envVal;
+}
+
 export function loadAppSettings(): AppSettings {
   const all = getAllSettings();
+  const env = envSettingsDefaults();
   return {
-    anthropicApiKey: (all.anthropicApiKey as string) || undefined,
-    openaiApiKey: (all.openaiApiKey as string) || undefined,
-    kimiBaseUrl: (all.kimiBaseUrl as string) || undefined,
-    kimiModel: (all.kimiModel as string) || undefined,
-    kimiApiKey: (all.kimiApiKey as string) || undefined,
-    claudeModel: (all.claudeModel as string) || undefined,
-    codexModel: (all.codexModel as string) || undefined,
-    defaultProvider: (all.defaultProvider as ModelProviderName) || undefined,
-    plannerProvider: (all.plannerProvider as ModelProviderName) || undefined,
-    reducerProvider: (all.reducerProvider as ModelProviderName) || undefined,
-    verifierProvider: (all.verifierProvider as ModelProviderName) || undefined,
-    commandAllowlist: (all.commandAllowlist as string[]) || DEFAULT_ALLOWLIST,
-    appWorkspaceRoot: (all.appWorkspaceRoot as string) || undefined,
+    anthropicApiKey: pick(all.anthropicApiKey as string | undefined, env.anthropicApiKey),
+    openaiApiKey: pick(all.openaiApiKey as string | undefined, env.openaiApiKey),
+    kimiBaseUrl: pick(all.kimiBaseUrl as string | undefined, env.kimiBaseUrl),
+    kimiModel: pick(all.kimiModel as string | undefined, env.kimiModel),
+    kimiApiKey: pick(all.kimiApiKey as string | undefined, env.kimiApiKey),
+    claudeModel: pick(all.claudeModel as string | undefined, env.claudeModel),
+    codexModel: pick(all.codexModel as string | undefined, env.codexModel),
+    defaultProvider: pick(all.defaultProvider as ModelProviderName | undefined, env.defaultProvider),
+    plannerProvider: pick(all.plannerProvider as ModelProviderName | undefined, env.plannerProvider),
+    reducerProvider: pick(all.reducerProvider as ModelProviderName | undefined, env.reducerProvider),
+    verifierProvider: pick(all.verifierProvider as ModelProviderName | undefined, env.verifierProvider),
+    commandAllowlist:
+      Array.isArray(all.commandAllowlist) && (all.commandAllowlist as string[]).length > 0
+        ? (all.commandAllowlist as string[])
+        : DEFAULT_ALLOWLIST,
+    appWorkspaceRoot: pick(all.appWorkspaceRoot as string | undefined, undefined),
   };
 }
 

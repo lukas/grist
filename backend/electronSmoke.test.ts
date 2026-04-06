@@ -21,7 +21,7 @@ describe.skipIf(!canRunElectronGui)("electron preload (real Binary)", () => {
         cwd: root,
         stdio: "inherit",
         env: { ...process.env, FORCE_COLOR: "0" },
-        shell: true,
+        shell: process.platform === "win32" ? "cmd.exe" : "/bin/sh",
       });
     }
   );

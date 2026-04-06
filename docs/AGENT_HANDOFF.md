@@ -53,7 +53,7 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 
 ## Provider env / settings
 
-SQLite `settings` table + optional env: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. Kimi uses OpenAI-compatible HTTP; empty API key omits `Authorization` header.
+SQLite `settings` table **or** repo-root **`.env`** (gitignored; see `.env.example`). `loadAppSettings()` prefers DB values when set, else env. Prefix: `GRIST_*` (e.g. `GRIST_KIMI_BASE_URL`, `GRIST_KIMI_API_KEY`, `GRIST_KIMI_MODEL`, `GRIST_DEFAULT_PROVIDER`). If Kimi URL or key is set and `GRIST_DEFAULT_PROVIDER` is unset, default provider is **kimi**. Also accepts `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` when `GRIST_*` variants are absent.
 
 ## Known gaps / follow-ups
 

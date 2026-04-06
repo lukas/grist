@@ -19,8 +19,8 @@ export function createProvider(name: ModelProviderName, settings: AppSettings): 
       return new OpenAICompatibleProvider("codex", key, "https://api.openai.com/v1", settings.codexModel || "gpt-4.1");
     }
     case "kimi": {
-      const base = settings.kimiBaseUrl || "http://127.0.0.1:11434/v1";
-      const model = settings.kimiModel || "kimi";
+      const base = settings.kimiBaseUrl || "http://127.0.0.1:8000/v1";
+      const model = settings.kimiModel || "moonshotai/Kimi-K2.5";
       return new OpenAICompatibleProvider("kimi", settings.kimiApiKey || "", base, model);
     }
     default:
