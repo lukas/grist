@@ -5,12 +5,14 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"vite --config frontend/vite.config.ts\" \"wait-on tcp:5173 && npm run build:electron && electron .\"",
+    "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
+    "dev": "concurrently -k \"vite --config frontend/vite.config.ts\" \"wait-on tcp:5173 && npm run build:electron && npm run rebuild:electron && electron .\"",
     "build:electron": "node scripts/build-electron.mjs",
     "build": "npm run build:electron && npx vite build --config frontend/vite.config.ts",
-    "start": "electron .",
+    "start": "npm run rebuild:electron && electron .",
+    "pretest": "npm rebuild better-sqlite3",
     "test": "vitest run",
-    "test:watch": "vitest",
+    "test:watch": "npm rebuild better-sqlite3 && vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -20,6 +22,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.13.10",
     "@types/react": "^18.3.18",
