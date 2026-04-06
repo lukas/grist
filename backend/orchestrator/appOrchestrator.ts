@@ -19,7 +19,7 @@ const PATCH_TOOLS = ALL_TOOL_NAMES.filter((n) => n !== "remove_worktree");
 
 export type BroadcastFn = (payload: { kind: string; jobId?: number; taskId?: number; data?: unknown }) => void;
 
-export class SwarmOrchestrator {
+export class GristOrchestrator {
   private timers = new Map<number, ReturnType<typeof setInterval>>();
   private inflight = new Map<number, Promise<void>>();
   private aborts = new Map<number, AbortController>();
@@ -123,7 +123,7 @@ export class SwarmOrchestrator {
   spawnPatchTask(jobId: number, goal: string): number | null {
     const job = getJob(jobId);
     if (!job) return null;
-    const branch = `swarm-patch-${Date.now()}`;
+    const branch = `grist-patch-${Date.now()}`;
     const id = insertTask({
       job_id: jobId,
       parent_task_id: null,

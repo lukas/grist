@@ -33,7 +33,7 @@ export function toolWriteFile(ctx: ToolContext, args: { path: string; content: s
 export function toolApplyPatch(ctx: ToolContext, args: { diff: string }): ToolResult {
   if (!ctx.worktreePath) return { ok: false, error: "No worktree — patch forbidden" };
   try {
-    const patchFile = join(ctx.worktreePath, ".swarm_operator_patch.diff");
+    const patchFile = join(ctx.worktreePath, ".grist_patch.diff");
     writeFileSync(patchFile, args.diff, "utf8");
     const r = spawnSync("git", ["apply", patchFile], { cwd: ctx.worktreePath, encoding: "utf8", timeout: 60_000 });
     if (r.status !== 0) {

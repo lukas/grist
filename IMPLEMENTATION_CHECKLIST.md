@@ -53,7 +53,7 @@ Use this to verify the spec against the codebase. Checked items are implemented 
 
 ## Acceptance criteria (manual in Electron)
 
-1. [ ] Open app, pick repo, enter goal, run swarm (mock provider works without API keys).
+1. [ ] Open app, pick repo, enter goal, run a job (mock provider works without API keys).
 2. [ ] See parallel tasks (up to 4).
 3. [ ] Inspect findings / scratchpad paths in UI.
 4. [ ] Redirect a running task (goal update + event).

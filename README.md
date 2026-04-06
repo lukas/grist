@@ -1,6 +1,6 @@
-# Swarm Operator (grist)
+# Grist
 
-Local **macOS Electron** app to supervise a small coding-agent swarm against a **git repo**: parallel workers (max 4), structured tool loop, SQLite state, optional **git worktrees** for patches, reducer + verifier artifacts.
+Local **macOS Electron** app to supervise a small team of coding agents against a **git repo**: parallel workers (max 4), structured tool loop, SQLite state, optional **git worktrees** for patches, reducer + verifier artifacts.
 
 Repository: [github.com/lukas/grist](https://github.com/lukas/grist)
 
@@ -33,6 +33,7 @@ Default model provider is **mock** (no API keys). Set providers under **Provider
 |------|------|
 | 2026-04-06 | **grV0 scaffold:** SQLite jobs/tasks/artifacts/events/settings; template planner (4× analysis + reducer); scheduler with concurrency 4, stall + duplicate-tool hints; worker structured JSON loop; reducer + verifier passes; full tool surface (repo, scratchpad, artifacts, execution with allowlist, worktree patch tools); providers: mock, Claude, Codex (OpenAI API), Kimi (OpenAI-compatible); Electron IPC + React Mission Control / tasks / detail / findings / events / patch table; `openPath` for Finder; vitest for deps, DB insert, allowlist. |
 | 2026-04-06 | **Dev UX:** `@electron/rebuild` + `rebuild:electron` before Electron; `pretest` / `test:watch` rebuild `better-sqlite3` for system Node so tests and Electron both work. |
+| 2026-04-06 | **Product name:** shipped as **Grist** (npm package `grist`, DB file `grist.sqlite`). Older `swarm.sqlite` is not migrated automatically. |
 
 ## Spec
 

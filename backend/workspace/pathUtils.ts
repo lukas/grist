@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-/** App-managed root: ~/.swarm_operator (or overridden). */
+/** App-managed workspace root (default under Electron userData; override via settings). */
 export function jobRoot(appWorkspaceRoot: string, jobId: number): string {
   return join(appWorkspaceRoot, "jobs", String(jobId));
 }

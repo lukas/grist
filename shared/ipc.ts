@@ -43,4 +43,4 @@ export type JobControlAction =
   | { type: "summarize_now"; jobId: number };
 
 /** Main process `webContents.send(IPC.events, …)` payload. */
-export type SwarmEvent = { kind: string; jobId?: number; taskId?: number; data?: unknown };
+export type GristEvent = { kind: string; jobId?: number; taskId?: number; data?: unknown };

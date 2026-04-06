@@ -1,8 +1,8 @@
-# Swarm Operator (grist) — agent handoff
+# Grist — agent handoff
 
 ## What this repo is
 
-macOS Electron app for **supervising** a small coding-agent swarm on a **local git repo**: planner → scheduler (≤4 workers) → reducer → optional patch worktrees + verifier. v0 prioritizes inspectability and operator control, not autonomy.
+**Grist** is a macOS Electron app for **supervising** a small team of coding agents on a **local git repo**: planner → scheduler (≤4 workers) → reducer → optional patch worktrees + verifier. v0 prioritizes inspectability and operator control, not autonomy.
 
 ## Run / build
 
@@ -25,7 +25,7 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 
 ### Paths
 
-- **DB:** `app.getPath('userData')/swarm.sqlite`
+- **DB:** `app.getPath('userData')/grist.sqlite` (renamed from earlier `swarm.sqlite`; no auto-migration)
 - **Scratch/worktrees:** `userData/workspace/jobs/<jobId>/…` (override via settings `appWorkspaceRoot`)
 - **Schema file:** copied to `dist-electron/schema.sql` on electron build; runtime loads via `fileURLToPath` + fallbacks (`backend/db/db.ts`)
 

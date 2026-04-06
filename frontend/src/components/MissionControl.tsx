@@ -44,7 +44,7 @@ export function MissionControl({
 
   return (
     <header className="flex flex-wrap items-center gap-3 border-b border-border bg-[#121922] px-3 py-2 text-sm">
-      <h1 className="text-base font-semibold text-white">Swarm Operator</h1>
+      <h1 className="text-base font-semibold text-white">Grist</h1>
       <button type="button" className="rounded bg-accent px-2 py-1 text-white" onClick={onPickRepo}>
         Repo…
       </button>

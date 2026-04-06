@@ -13,7 +13,7 @@ function listFilesRecursive(root: string, base: string, maxFiles: number, out: s
     return;
   }
   for (const e of entries) {
-    if (e === ".git" || e === "node_modules" || e === ".swarm_operator") continue;
+    if (e === ".git" || e === "node_modules" || e === ".grist") continue;
     const full = join(base, e);
     let st;
     try {

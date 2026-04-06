@@ -4,7 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, existsSync } from "node:fs";
 import { openDatabase, closeDatabase } from "../backend/db/db.js";
-import { SwarmOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
+import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { IPC } from "../shared/ipc.js";
 import { getSetting, setSetting, loadAppSettings, saveAppSettingsPatch } from "../backend/settings/appSettings.js";
 import { updateJob } from "../backend/db/jobRepo.js";
@@ -14,7 +14,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 
 let mainWindow: BrowserWindow | null = null;
-let orchestrator: SwarmOrchestrator;
+let orchestrator: GristOrchestrator;
 
 function broadcast(payload: { kind: string; jobId?: number; taskId?: number; data?: unknown }): void {
   mainWindow?.webContents.send(IPC.events, payload);
@@ -34,7 +34,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    title: "Swarm Operator",
+    title: "Grist",
   });
 
   mainWindow.webContents.on("preload-error", (_event, path, err) => {
@@ -64,7 +64,7 @@ function ensureWorkspaceRoot(): string {
 
 function registerIpc(): void {
   ipcMain.handle(IPC.ping, () => "pong");
-  ipcMain.handle(IPC.dbPath, () => join(app.getPath("userData"), "swarm.sqlite"));
+  ipcMain.handle(IPC.dbPath, () => join(app.getPath("userData"), "grist.sqlite"));
 
   ipcMain.handle(IPC.pickRepo, async () => {
     const r = await dialog.showOpenDialog(mainWindow!, {
@@ -148,12 +148,12 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
-  const dbPath = join(app.getPath("userData"), "swarm.sqlite");
+  const dbPath = join(app.getPath("userData"), "grist.sqlite");
   mkdirSync(dirname(dbPath), { recursive: true });
   openDatabase(dbPath);
 
   const ws = ensureWorkspaceRoot();
-  orchestrator = new SwarmOrchestrator(ws);
+  orchestrator = new GristOrchestrator(ws);
   orchestrator.setBroadcast(broadcast);
 
   registerIpc();

@@ -120,7 +120,7 @@ export async function runTaskWorker(
       break;
     }
 
-    const sys = `You are a coding swarm worker. Task role: ${task.role}. One tool per turn.
+    const sys = `You are a Grist coding agent. Task role: ${task.role}. One tool per turn.
 Allowed tools: ${task.allowed_tools_json}
 Respond ONLY with JSON matching the worker decision schema (decision: call_tool|finish|pause_self).`;
     const user = `Job goal: ${job.user_goal}

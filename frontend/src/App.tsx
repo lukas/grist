@@ -28,7 +28,7 @@ export default function App() {
   if (typeof window !== "undefined" && !window.grist) {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-2 bg-panel p-6 text-center text-gray-100">
-        <h1 className="text-lg font-semibold">Swarm Operator</h1>
+        <h1 className="text-lg font-semibold">Grist</h1>
         <p className="max-w-md text-sm text-muted">
           Preload did not expose <code className="text-accent">window.grist</code>. Check that{" "}
           <code className="text-accent">contextIsolation</code> is on and{" "}

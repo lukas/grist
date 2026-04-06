@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "../shared/ipc.js";
-import type { TaskControlAction, JobControlAction, SwarmEvent } from "../shared/ipc.js";
+import type { TaskControlAction, JobControlAction, GristEvent } from "../shared/ipc.js";
 
 const api = {
   ping: () => ipcRenderer.invoke(IPC.ping) as Promise<string>,
@@ -28,8 +28,8 @@ const api = {
   spawnVerifier: (jobId: number, patchTaskId: number) =>
     ipcRenderer.invoke(IPC.spawnVerifier, jobId, patchTaskId),
   openPath: (p: string) => ipcRenderer.invoke(IPC.openPath, p) as Promise<string>,
-  onEvent: (cb: (e: SwarmEvent) => void) => {
-    const handler = (_: Electron.IpcRendererEvent, payload: SwarmEvent) => cb(payload);
+  onEvent: (cb: (e: GristEvent) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, payload: GristEvent) => cb(payload);
     ipcRenderer.on(IPC.events, handler);
     return () => ipcRenderer.removeListener(IPC.events, handler);
   },
