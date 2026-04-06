@@ -1,7 +1,7 @@
 import * as esbuild from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { copyFileSync } from "node:fs";
+import { copyFileSync, unlinkSync } from "node:fs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -20,12 +20,26 @@ await esbuild.build({
   outfile: join(root, "dist-electron/main.js"),
 });
 
+/** Preload must be CJS: ESM preload + package "type":"module" often breaks in Electron (no window.grist). */
 await esbuild.build({
-  ...common,
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  sourcemap: true,
+  external: ["electron"],
   entryPoints: [join(root, "electron/preload.ts")],
-  outfile: join(root, "dist-electron/preload.js"),
+  outfile: join(root, "dist-electron/preload.cjs"),
 });
 
 copyFileSync(join(root, "backend/db/schema.sql"), join(root, "dist-electron/schema.sql"));
+
+for (const stale of ["preload.js", "preload.js.map"]) {
+  try {
+    unlinkSync(join(root, "dist-electron", stale));
+  } catch {
+    /* ignore */
+  }
+}
 
 console.log("electron bundle ok");

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, existsSync } from "node:fs";
@@ -20,15 +21,24 @@ function broadcast(payload: { kind: string; jobId?: number; taskId?: number; dat
 }
 
 function createWindow(): void {
+  const preloadPath = join(__dirname, "preload.cjs");
+  if (!existsSync(preloadPath)) {
+    console.error("Preload missing at", preloadPath);
+  }
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     webPreferences: {
-      preload: join(__dirname, "preload.js"),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
     },
     title: "Swarm Operator",
+  });
+
+  mainWindow.webContents.on("preload-error", (_event, path, err) => {
+    console.error("preload-error", path, err);
   });
 
   if (isDev) {

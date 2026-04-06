@@ -32,7 +32,7 @@ export default function App() {
         <p className="max-w-md text-sm text-muted">
           Preload did not expose <code className="text-accent">window.grist</code>. Check that{" "}
           <code className="text-accent">contextIsolation</code> is on and{" "}
-          <code className="text-accent">preload.js</code> loaded next to the main bundle.
+          <code className="text-accent">preload.cjs</code> loaded next to the main bundle (CJS; ESM preload breaks here).
         </p>
       </div>
     );

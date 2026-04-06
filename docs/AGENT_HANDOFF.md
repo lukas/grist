@@ -18,6 +18,8 @@ npm run dev            # Vite :5173 + Electron (needs display)
 
 **Black screen in dev:** A strict `Content-Security-Policy` meta (e.g. `script-src 'self'` only) blocks Vite HMR (`unsafe-eval`). The app HTML intentionally omits a tight CSP for this local Electron shell.
 
+**`window.grist` missing:** Preload is built as **`dist-electron/preload.cjs` (CommonJS)**. ESM `preload.js` with root `package.json` `"type":"module"` often fails to run under Electron’s preload loader, so `contextBridge` never runs.
+
 - **DB:** `app.getPath('userData')/swarm.sqlite`
 - **Scratch/worktrees:** `userData/workspace/jobs/<jobId>/…` (override via settings `appWorkspaceRoot`)
 - **Schema file:** copied to `dist-electron/schema.sql` on electron build; runtime loads via `fileURLToPath` + fallbacks (`backend/db/db.ts`)
