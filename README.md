@@ -8,9 +8,8 @@ Repository: [github.com/lukas/grist](https://github.com/lukas/grist)
 
 ```bash
 npm install
-npm test              # vitest + on macOS: real Electron preload smoke (`SMOKE_OK`)
-npm run test:all      # same as npm test (alias for clarity)
-npm run test:electron-smoke   # build main/preload + verify window.grist (no Vite)
+npm test              # vitest + preload bundle checks + on macOS: Electron smoke (`SMOKE_OK`)
+npm run test:electron-smoke   # only the Electron preload check (also runs inside npm test on macOS)
 npm run dev             # UI: http://localhost:5173 + Electron window
 npm run build           # production bundles: dist-electron/, dist-frontend/
 ```

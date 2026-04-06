@@ -13,7 +13,6 @@
     "pretest": "npm rebuild better-sqlite3",
     "test": "vitest run",
     "test:electron-smoke": "npm run build:electron && npx electron electron/smoke.cjs",
-    "test:all": "npm test && npm run test:electron-smoke",
     "test:watch": "npm rebuild better-sqlite3 && vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
