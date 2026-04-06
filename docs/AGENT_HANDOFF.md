@@ -12,13 +12,18 @@ npm install
 npm test
 npm run build          # dist-electron + dist-frontend
 npm run dev            # Vite :5173 + Electron (needs display)
+npm run test:electron-smoke   # build + Electron-only check for window.grist
 ```
+
+**Tests:** `npm test` runs Vitest (including `preloadBundle.test.ts`: CJS preload shape) and, on **macOS** or when `DISPLAY` / `RUN_ELECTRON_SMOKE=1` is set, `electron/smoke.cjs` (expect `SMOKE_OK`).
 
 **Native module:** `better-sqlite3` must match the Node ABI. `npm run dev` / `npm start` run `electron-rebuild -f -w better-sqlite3`. `npm test` runs `npm rebuild better-sqlite3` first (Vitest uses system Node, not Electron).
 
 **Black screen in dev:** A strict `Content-Security-Policy` meta (e.g. `script-src 'self'` only) blocks Vite HMR (`unsafe-eval`). The app HTML intentionally omits a tight CSP for this local Electron shell.
 
 **`window.grist` missing:** Preload is built as **`dist-electron/preload.cjs` (CommonJS)**. ESM `preload.js` with root `package.json` `"type":"module"` often fails to run under Electron’s preload loader, so `contextBridge` never runs.
+
+### Paths
 
 - **DB:** `app.getPath('userData')/swarm.sqlite`
 - **Scratch/worktrees:** `userData/workspace/jobs/<jobId>/…` (override via settings `appWorkspaceRoot`)
