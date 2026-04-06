@@ -37,6 +37,7 @@ Default model provider is **mock** (no API keys). Set providers under **Provider
 | 2026-04-06 | **Product name:** shipped as **Grist** (npm package `grist`, DB file `grist.sqlite`). Older `swarm.sqlite` is not migrated automatically. |
 | 2026-04-06 | **`.env`:** gitignored repo-root `.env` loaded on startup; `GRIST_KIMI_*` + `GRIST_DEFAULT_PROVIDER`; DB settings override env when set. |
 | 2026-04-06 | **Mission bar:** **Enter** in goal or notes triggers **Plan & run** (same as the button: repo + non-empty goal required). |
+| 2026-04-06 | **Electron main:** `dotenv` is **esbuild external** so the ESM main bundle does not inline CJS `require("fs")` (avoids startup crash). |
 
 ## Spec
 

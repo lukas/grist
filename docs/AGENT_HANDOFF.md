@@ -23,6 +23,8 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 
 **`window.grist` missing:** Preload is built as **`dist-electron/preload.cjs` (CommonJS)**. ESM `preload.js` with root `package.json` `"type":"module"` often fails to run under Electron’s preload loader, so `contextBridge` never runs.
 
+**Main bundle + `dotenv`:** `dist-electron/main.js` is ESM from esbuild. **`dotenv` must stay `external`** in `scripts/build-electron.mjs`. Bundling it inlines CJS that does `require("fs")` → Electron error *Dynamic require of "fs" is not supported*.
+
 ### Paths
 
 - **DB:** `app.getPath('userData')/grist.sqlite` (renamed from earlier `swarm.sqlite`; no auto-migration)

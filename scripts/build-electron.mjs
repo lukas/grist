@@ -11,7 +11,8 @@ const common = {
   target: "node20",
   format: "esm",
   sourcemap: true,
-  external: ["electron", "better-sqlite3"],
+  /** dotenv is CJS with `require("fs")`; bundling it into ESM breaks under Electron ("Dynamic require of fs"). */
+  external: ["electron", "better-sqlite3", "dotenv"],
 };
 
 await esbuild.build({
