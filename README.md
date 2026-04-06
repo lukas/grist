@@ -36,6 +36,7 @@ Default model provider is **mock** (no API keys). Set providers under **Provider
 | 2026-04-06 | **Dev UX:** `@electron/rebuild` + `rebuild:electron` before Electron; `pretest` / `test:watch` rebuild `better-sqlite3` for system Node so tests and Electron both work. |
 | 2026-04-06 | **Product name:** shipped as **Grist** (npm package `grist`, DB file `grist.sqlite`). Older `swarm.sqlite` is not migrated automatically. |
 | 2026-04-06 | **`.env`:** gitignored repo-root `.env` loaded on startup; `GRIST_KIMI_*` + `GRIST_DEFAULT_PROVIDER`; DB settings override env when set. |
+| 2026-04-06 | **Mission bar:** **Enter** in goal or notes triggers **Plan & run** (same as the button: repo + non-empty goal required). |
 
 ## Spec
 

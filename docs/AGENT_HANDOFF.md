@@ -42,6 +42,7 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 | Tools | `backend/tools/executeTool.ts` (+ split modules) |
 | Workspace | `backend/workspace/*` |
 | React UI | `frontend/src/App.tsx`, `frontend/src/components/*` |
+| Mission bar | **Enter** in goal or notes runs the same path as **Plan & run** (needs repo + non-empty goal). |
 
 ## Contracts / invariants
 

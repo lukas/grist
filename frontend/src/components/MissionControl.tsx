@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 
 type Props = {
   repo: string;
@@ -42,6 +42,18 @@ export function MissionControl({
 
   const elapsed = started ? Math.floor((Date.now() - started) / 1000) : 0;
 
+  const tryCreateRun = () => {
+    if (!repo || !goal.trim()) return;
+    setStarted(Date.now());
+    void onCreateRun();
+  };
+
+  const onGoalOrNotesKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    tryCreateRun();
+  };
+
   return (
     <header className="flex flex-wrap items-center gap-3 border-b border-border bg-[#121922] px-3 py-2 text-sm">
       <h1 className="text-base font-semibold text-white">Grist</h1>
@@ -56,21 +68,20 @@ export function MissionControl({
         placeholder="Goal (e.g. find flaky auth tests)"
         value={goal}
         onChange={(e) => onGoalChange(e.target.value)}
+        onKeyDown={onGoalOrNotesKeyDown}
       />
       <input
         className="w-48 rounded border border-border bg-panel px-2 py-1 text-xs"
         placeholder="Operator notes / constraints"
         value={notes}
         onChange={(e) => onNotesChange(e.target.value)}
+        onKeyDown={onGoalOrNotesKeyDown}
       />
       <button
         type="button"
         className="rounded bg-emerald-600 px-2 py-1 text-white disabled:opacity-40"
         disabled={!repo || !goal.trim()}
-        onClick={() => {
-          setStarted(Date.now());
-          void onCreateRun();
-        }}
+        onClick={tryCreateRun}
       >
         Plan &amp; run
       </button>
