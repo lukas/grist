@@ -20,9 +20,23 @@ export default function App() {
   const refresh = useCallback(() => setTick((x) => x + 1), []);
 
   useEffect(() => {
+    if (!window.grist?.onEvent) return;
     const off = window.grist.onEvent(() => refresh());
     return off;
   }, [refresh]);
+
+  if (typeof window !== "undefined" && !window.grist) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-2 bg-panel p-6 text-center text-gray-100">
+        <h1 className="text-lg font-semibold">Swarm Operator</h1>
+        <p className="max-w-md text-sm text-muted">
+          Preload did not expose <code className="text-accent">window.grist</code>. Check that{" "}
+          <code className="text-accent">contextIsolation</code> is on and{" "}
+          <code className="text-accent">preload.js</code> loaded next to the main bundle.
+        </p>
+      </div>
+    );
+  }
 
   useEffect(() => {
     if (!jobId) return;
@@ -43,8 +57,6 @@ export default function App() {
     await window.grist.startScheduler(id);
     refresh();
   };
-
-  const snapshot = jobId ? null : null;
 
   return (
     <div className="flex h-screen flex-col bg-panel text-gray-100">
