@@ -6,6 +6,9 @@ declare global {
       ping(): Promise<string>;
       dbPath(): Promise<string>;
       pickRepo(): Promise<string | null>;
+      recentRepos(): Promise<string[]>;
+      isGitRepo(p: string): Promise<boolean>;
+      initRepo(dirPath?: string): Promise<string | null>;
       createJob(p: { repoPath: string; goal: string; operatorNotes?: string }): Promise<number>;
       getJob(id: number): Promise<unknown>;
       listJobs(): Promise<unknown[]>;

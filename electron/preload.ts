@@ -6,6 +6,9 @@ const api = {
   ping: () => ipcRenderer.invoke(IPC.ping) as Promise<string>,
   dbPath: () => ipcRenderer.invoke(IPC.dbPath) as Promise<string>,
   pickRepo: () => ipcRenderer.invoke(IPC.pickRepo) as Promise<string | null>,
+  recentRepos: () => ipcRenderer.invoke(IPC.recentRepos) as Promise<string[]>,
+  isGitRepo: (p: string) => ipcRenderer.invoke(IPC.isGitRepo, p) as Promise<boolean>,
+  initRepo: (dirPath?: string) => ipcRenderer.invoke(IPC.initRepo, dirPath) as Promise<string | null>,
   createJob: (payload: { repoPath: string; goal: string; operatorNotes?: string }) =>
     ipcRenderer.invoke(IPC.createJob, payload) as Promise<number>,
   getJob: (id: number) => ipcRenderer.invoke(IPC.getJob, id),

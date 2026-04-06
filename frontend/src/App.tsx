@@ -6,6 +6,7 @@ import { GlobalFindings } from "./components/GlobalFindings";
 import { EventStream } from "./components/EventStream";
 import { PatchComparison } from "./components/PatchComparison";
 import { SettingsModal } from "./components/SettingsModal";
+import { RepoDialog } from "./components/RepoDialog";
 
 export default function App() {
   const [repo, setRepo] = useState("");
@@ -15,9 +16,21 @@ export default function App() {
   const [tick, setTick] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [repoDialogOpen, setRepoDialogOpen] = useState(false);
+  const [pendingRun, setPendingRun] = useState(false);
   const [view, setView] = useState<"table" | "dag">("table");
+  const [provider, setProvider] = useState("");
 
   const refresh = useCallback(() => setTick((x) => x + 1), []);
+
+  const loadProvider = useCallback(() => {
+    void window.grist?.getSettings().then((raw) => {
+      const o = raw as Record<string, unknown>;
+      setProvider(String(o.defaultProvider ?? "mock"));
+    });
+  }, []);
+
+  useEffect(() => { loadProvider(); }, [loadProvider]);
 
   useEffect(() => {
     if (!window.grist?.onEvent) return;
@@ -44,18 +57,33 @@ export default function App() {
     return () => clearInterval(id);
   }, [jobId, refresh]);
 
-  const pickRepo = async () => {
-    const p = await window.grist.pickRepo();
-    if (p) setRepo(p);
+  const openRepoDialog = () => setRepoDialogOpen(true);
+
+  const onRepoSelected = (repoPath: string) => {
+    setRepo(repoPath);
+    setRepoDialogOpen(false);
+    if (pendingRun && goal.trim()) {
+      setPendingRun(false);
+      void startRun(repoPath);
+    }
   };
 
-  const createAndPlan = async () => {
-    if (!repo || !goal.trim()) return;
-    const id = await window.grist.createJob({ repoPath: repo, goal: goal.trim(), operatorNotes: notes });
+  const startRun = async (repoPath: string) => {
+    const id = await window.grist.createJob({ repoPath, goal: goal.trim(), operatorNotes: notes });
     setJobId(id);
     await window.grist.runPlanner(id);
     await window.grist.startScheduler(id);
     refresh();
+  };
+
+  const createAndPlan = async () => {
+    if (!goal.trim()) return;
+    if (!repo) {
+      setPendingRun(true);
+      setRepoDialogOpen(true);
+      return;
+    }
+    await startRun(repo);
   };
 
   return (
@@ -68,8 +96,9 @@ export default function App() {
         onGoalChange={setGoal}
         onNotesChange={setNotes}
         notes={notes}
-        onPickRepo={pickRepo}
+        onPickRepo={openRepoDialog}
         onCreateRun={createAndPlan}
+        provider={provider}
         onOpenSettings={() => setSettingsOpen(true)}
         view={view}
         onViewChange={setView}
@@ -96,7 +125,13 @@ export default function App() {
       <div className="h-40 border-t border-border bg-panel p-2">
         <EventStream jobId={jobId} tick={tick} />
       </div>
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsModal onClose={() => { setSettingsOpen(false); loadProvider(); }} />}
+      {repoDialogOpen && (
+        <RepoDialog
+          onSelect={onRepoSelected}
+          onCancel={() => { setRepoDialogOpen(false); setPendingRun(false); }}
+        />
+      )}
     </div>
   );
 }

@@ -3,8 +3,10 @@ import { resolve } from "node:path";
 
 export default defineConfig({
   test: {
-    environment: "node",
-    include: ["backend/**/*.test.ts"],
+    include: ["backend/**/*.test.ts", "frontend/**/*.test.tsx"],
+    environmentMatchGlobs: [
+      ["frontend/**", "jsdom"],
+    ],
   },
   resolve: {
     alias: {

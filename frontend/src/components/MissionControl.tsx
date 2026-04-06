@@ -6,6 +6,7 @@ type Props = {
   notes: string;
   jobId: number | null;
   tick: number;
+  provider: string;
   onGoalChange: (s: string) => void;
   onNotesChange: (s: string) => void;
   onPickRepo: () => void;
@@ -15,12 +16,20 @@ type Props = {
   onViewChange: (v: "table" | "dag") => void;
 };
 
+const PROVIDER_COLORS: Record<string, string> = {
+  claude: "bg-orange-700",
+  codex: "bg-green-700",
+  kimi: "bg-blue-700",
+  mock: "bg-gray-600",
+};
+
 export function MissionControl({
   repo,
   goal,
   notes,
   jobId,
   tick,
+  provider,
   onGoalChange,
   onNotesChange,
   onPickRepo,
@@ -43,7 +52,7 @@ export function MissionControl({
   const elapsed = started ? Math.floor((Date.now() - started) / 1000) : 0;
 
   const tryCreateRun = () => {
-    if (!repo || !goal.trim()) return;
+    if (!goal.trim()) return;
     setStarted(Date.now());
     void onCreateRun();
   };
@@ -80,13 +89,14 @@ export function MissionControl({
       <button
         type="button"
         className="rounded bg-emerald-600 px-2 py-1 text-white disabled:opacity-40"
-        disabled={!repo || !goal.trim()}
+        disabled={!goal.trim()}
         onClick={tryCreateRun}
       >
         Plan &amp; run
       </button>
-      <button type="button" className="rounded border border-border px-2 py-1" onClick={onOpenSettings}>
-        Providers
+      <button type="button" className="flex items-center gap-1.5 rounded border border-border px-2 py-1" onClick={onOpenSettings}>
+        <span className={`inline-block h-2 w-2 rounded-full ${PROVIDER_COLORS[provider] ?? "bg-gray-600"}`} />
+        <span>{provider || "provider"}</span>
       </button>
       <select
         className="rounded border border-border bg-panel px-1 py-1"

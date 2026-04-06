@@ -44,7 +44,8 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 | Tools | `backend/tools/executeTool.ts` (+ split modules) |
 | Workspace | `backend/workspace/*` |
 | React UI | `frontend/src/App.tsx`, `frontend/src/components/*` |
-| Mission bar | **Enter** in goal or notes runs the same path as **Plan & run** (needs repo + non-empty goal). |
+| Mission bar | **Enter** in goal or notes runs **Plan & run**. If no repo selected → opens **RepoDialog** (recent repos, browse, paste path, create new via `git init`). |
+| RepoDialog | `frontend/src/components/RepoDialog.tsx`. IPC: `recentRepos` (from jobs table), `isGitRepo`, `initRepo`. |
 
 ## Contracts / invariants
 

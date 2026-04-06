@@ -2,7 +2,8 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDatabase, closeDatabase } from "../backend/db/db.js";
+import { execFileSync } from "node:child_process";
+import { openDatabase, closeDatabase, getDb } from "../backend/db/db.js";
 import { loadDotenvFile } from "../backend/settings/loadDotenv.js";
 import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { IPC } from "../shared/ipc.js";
@@ -72,6 +73,41 @@ function registerIpc(): void {
     });
     if (r.canceled || !r.filePaths[0]) return null;
     return r.filePaths[0];
+  });
+
+  ipcMain.handle(IPC.recentRepos, () => {
+    const rows = getDb()
+      .prepare("SELECT DISTINCT repo_path FROM jobs ORDER BY created_at DESC LIMIT 20")
+      .all() as { repo_path: string }[];
+    return rows.map((r) => r.repo_path).filter((p) => existsSync(p));
+  });
+
+  ipcMain.handle(IPC.isGitRepo, (_, p: string) => {
+    try {
+      if (!existsSync(p)) return false;
+      execFileSync("git", ["rev-parse", "--git-dir"], { cwd: p, stdio: "pipe" });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle(IPC.initRepo, async (_, dirPath?: string) => {
+    let target = dirPath;
+    if (!target) {
+      const r = await dialog.showOpenDialog(mainWindow!, {
+        properties: ["openDirectory", "createDirectory"],
+        title: "Choose folder for new git repo",
+      });
+      if (r.canceled || !r.filePaths[0]) return null;
+      target = r.filePaths[0];
+    }
+    try {
+      execFileSync("git", ["init"], { cwd: target, stdio: "pipe" });
+      return target;
+    } catch (e) {
+      return null;
+    }
   });
 
   ipcMain.handle(IPC.createJob, (_, payload: { repoPath: string; goal: string; operatorNotes?: string }) => {

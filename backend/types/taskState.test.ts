@@ -12,6 +12,13 @@ describe("WorkerDecisionSchema", () => {
     expect(d.tool_name).toBe("read_file");
   });
 
+  it("accepts decision without reasoning_summary", () => {
+    const d = WorkerDecisionSchema.parse({
+      decision: "finish",
+    });
+    expect(d.reasoning_summary).toBe("");
+  });
+
   it("rejects invalid decision enum", () => {
     expect(() =>
       WorkerDecisionSchema.parse({
