@@ -22,8 +22,9 @@ export interface AppSettings {
 const DEFAULT_ALLOWLIST = ["npm test", "pnpm test", "yarn test", "make test", "pytest", "go test ./..."];
 
 function pick<T>(dbVal: T | undefined, envVal: T | undefined): T | undefined {
+  if (envVal !== undefined && envVal !== null && envVal !== "") return envVal;
   if (dbVal !== undefined && dbVal !== null && dbVal !== "") return dbVal as T;
-  return envVal;
+  return undefined;
 }
 
 export function loadAppSettings(): AppSettings {

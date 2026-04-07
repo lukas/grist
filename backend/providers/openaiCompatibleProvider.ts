@@ -32,10 +32,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const raw = await res.text();
     if (!res.ok) throw new Error(`${this.name} HTTP ${res.status}: ${raw.slice(0, 400)}`);
     const j = JSON.parse(raw) as {
-      choices: { message?: { content?: string }; finish_reason?: string }[];
+      choices: { message?: { content?: string; reasoning_content?: string }; finish_reason?: string }[];
       usage?: { prompt_tokens: number; completion_tokens: number };
     };
-    const text = j.choices[0]?.message?.content || "";
+    const msg = j.choices[0]?.message;
+    const text = msg?.content || msg?.reasoning_content || "";
     const tokensIn = j.usage?.prompt_tokens ?? 0;
     const tokensOut = j.usage?.completion_tokens ?? 0;
     return {

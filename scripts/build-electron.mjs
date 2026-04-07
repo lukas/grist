@@ -1,7 +1,7 @@
 import * as esbuild from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { copyFileSync, unlinkSync, mkdirSync, existsSync } from "node:fs";
+import { copyFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -47,6 +47,19 @@ for (const stale of ["preload.js", "preload.js.map"]) {
     unlinkSync(join(root, "dist-electron", stale));
   } catch {
     /* ignore */
+  }
+}
+
+// Patch Electron.app Info.plist so macOS menu bar shows "Grist" instead of "Electron" in dev mode.
+const plistPath = join(root, "node_modules/electron/dist/Electron.app/Contents/Info.plist");
+if (existsSync(plistPath)) {
+  let plist = readFileSync(plistPath, "utf-8");
+  const patched = plist
+    .replace(/<key>CFBundleDisplayName<\/key>\s*<string>[^<]*<\/string>/, "<key>CFBundleDisplayName</key>\n\t<string>Grist</string>")
+    .replace(/<key>CFBundleName<\/key>\s*<string>[^<]*<\/string>/, "<key>CFBundleName</key>\n\t<string>Grist</string>");
+  if (patched !== plist) {
+    writeFileSync(plistPath, patched);
+    console.log("patched Electron.app Info.plist → Grist");
   }
 }
 
