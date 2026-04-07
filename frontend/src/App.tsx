@@ -2,11 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { MissionControl } from "./components/MissionControl";
 import { TaskList } from "./components/TaskList";
 import { TaskDetail } from "./components/TaskDetail";
-import { GlobalFindings } from "./components/GlobalFindings";
-import { EventStream } from "./components/EventStream";
-import { PatchComparison } from "./components/PatchComparison";
 import { SettingsModal } from "./components/SettingsModal";
 import { RepoDialog } from "./components/RepoDialog";
+import { AutoPauseBanner } from "./components/AutoPauseBanner";
 
 export default function App() {
   const [repo, setRepo] = useState("");
@@ -18,8 +16,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [repoDialogOpen, setRepoDialogOpen] = useState(false);
   const [pendingRun, setPendingRun] = useState(false);
-  const [view, setView] = useState<"table" | "dag">("table");
   const [provider, setProvider] = useState("");
+  const [pauseWarnings, setPauseWarnings] = useState<{ taskId: number; message: string }[]>([]);
 
   const refresh = useCallback(() => setTick((x) => x + 1), []);
 
@@ -32,9 +30,31 @@ export default function App() {
 
   useEffect(() => { loadProvider(); }, [loadProvider]);
 
+  // Auto-load most recent job on startup
+  useEffect(() => {
+    void window.grist?.listJobs().then((rows) => {
+      const jobs = rows as { id: number; repo_path: string; user_goal: string; operator_notes?: string }[];
+      if (jobs.length > 0) {
+        const latest = jobs[jobs.length - 1];
+        setJobId(latest.id);
+        setRepo(latest.repo_path);
+        setGoal(latest.user_goal);
+        if (latest.operator_notes) setNotes(latest.operator_notes);
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!window.grist?.onEvent) return;
-    const off = window.grist.onEvent(() => refresh());
+    const off = window.grist.onEvent((e) => {
+      refresh();
+      if (e.kind === "auto_pause" && e.taskId) {
+        const msg = typeof e.data === "object" && e.data !== null
+          ? (e.data as Record<string, unknown>).reason as string ?? "Agent auto-paused"
+          : "Agent auto-paused";
+        setPauseWarnings((prev) => [...prev, { taskId: e.taskId!, message: String(msg) }]);
+      }
+    });
     return off;
   }, [refresh]);
 
@@ -76,6 +96,18 @@ export default function App() {
     refresh();
   };
 
+  const loadJob = (id: number) => {
+    setJobId(id);
+    setSelectedTaskId(null);
+    void window.grist.getJob(id).then((j) => {
+      const jr = j as Record<string, unknown>;
+      if (jr.repo_path) setRepo(String(jr.repo_path));
+      if (jr.user_goal) setGoal(String(jr.user_goal));
+      if (jr.operator_notes) setNotes(String(jr.operator_notes));
+    });
+    refresh();
+  };
+
   const createAndPlan = async () => {
     if (!goal.trim()) return;
     if (!repo) {
@@ -86,8 +118,16 @@ export default function App() {
     await startRun(repo);
   };
 
+  const dismissWarning = (idx: number) =>
+    setPauseWarnings((prev) => prev.filter((_, i) => i !== idx));
+
   return (
     <div className="flex h-screen flex-col bg-panel text-gray-100">
+      <AutoPauseBanner
+        warnings={pauseWarnings}
+        onDismiss={dismissWarning}
+        onDismissAll={() => setPauseWarnings([])}
+      />
       <MissionControl
         repo={repo}
         goal={goal}
@@ -100,30 +140,20 @@ export default function App() {
         onCreateRun={createAndPlan}
         provider={provider}
         onOpenSettings={() => setSettingsOpen(true)}
-        view={view}
-        onViewChange={setView}
       />
-      <div className="grid min-h-0 flex-1 grid-cols-12 gap-px bg-border">
-        <div className="col-span-3 flex min-h-0 flex-col overflow-hidden bg-panel p-2">
+      <div className="flex min-h-0 flex-1">
+        <div className="w-64 shrink-0 overflow-hidden border-r border-border/50 bg-panel p-2">
           <TaskList
             jobId={jobId}
             tick={tick}
             selectedId={selectedTaskId}
             onSelect={setSelectedTaskId}
-            view={view}
-            onRefresh={refresh}
+            onLoadJob={loadJob}
           />
         </div>
-        <div className="col-span-5 flex min-h-0 flex-col overflow-hidden bg-panel p-2">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-panel">
           <TaskDetail jobId={jobId} taskId={selectedTaskId} tick={tick} onRefresh={refresh} />
         </div>
-        <div className="col-span-4 flex min-h-0 flex-col gap-2 overflow-hidden bg-panel p-2">
-          <GlobalFindings jobId={jobId} tick={tick} />
-          <PatchComparison jobId={jobId} tick={tick} />
-        </div>
-      </div>
-      <div className="h-40 border-t border-border bg-panel p-2">
-        <EventStream jobId={jobId} tick={tick} />
       </div>
       {settingsOpen && <SettingsModal onClose={() => { setSettingsOpen(false); loadProvider(); }} />}
       {repoDialogOpen && (

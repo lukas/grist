@@ -1,7 +1,7 @@
 import * as esbuild from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { copyFileSync, unlinkSync } from "node:fs";
+import { copyFileSync, unlinkSync, mkdirSync, existsSync } from "node:fs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -34,6 +34,13 @@ await esbuild.build({
 });
 
 copyFileSync(join(root, "backend/db/schema.sql"), join(root, "dist-electron/schema.sql"));
+
+const assetsOut = join(root, "dist-electron/../assets");
+if (!existsSync(assetsOut)) mkdirSync(assetsOut, { recursive: true });
+const iconSrc = join(root, "assets/icon.png");
+if (existsSync(iconSrc)) copyFileSync(iconSrc, join(assetsOut, "icon.png"));
+const icnsSrc = join(root, "assets/icon.icns");
+if (existsSync(icnsSrc)) copyFileSync(icnsSrc, join(assetsOut, "icon.icns"));
 
 for (const stale of ["preload.js", "preload.js.map"]) {
   try {

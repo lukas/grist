@@ -27,7 +27,8 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 
 ### Paths
 
-- **DB:** `app.getPath('userData')/grist.sqlite` (renamed from earlier `swarm.sqlite`; no auto-migration)
+- **DB:** `app.getPath('userData')/grist.sqlite` (persists across restarts; stores all jobs/tasks/events)
+- **Logs:** `<repo>/.grist/logs/job-N/task-N.jsonl` (JSONL per task, stored in the repo itself; `.grist` auto-added to `.gitignore`)
 - **Scratch/worktrees:** `userData/workspace/jobs/<jobId>/…` (override via settings `appWorkspaceRoot`)
 - **Schema file:** copied to `dist-electron/schema.sql` on electron build; runtime loads via `fileURLToPath` + fallbacks (`backend/db/db.ts`)
 
@@ -46,13 +47,23 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 | React UI | `frontend/src/App.tsx`, `frontend/src/components/*` |
 | Mission bar | **Enter** in goal or notes runs **Plan & run**. If no repo selected → opens **RepoDialog** (recent repos, browse, paste path, create new via `git init`). |
 | RepoDialog | `frontend/src/components/RepoDialog.tsx`. IPC: `recentRepos` (from jobs table), `isGitRepo`, `initRepo`. |
+| Left sidebar | `TaskList.tsx` — **nested tree** of all jobs (newest first). Each job expands to show **Planner** (job-level events) + task tree (hierarchical via `parent_task_id`). Clicking a job switches to it. |
+| Main panel | `TaskDetail.tsx` — **chat-style dialog**. Events grouped by step; reasoning shown as text, tool call+result as ONE compact line (`✓ write_file → index.html`). Click to expand args/result/prompt/raw. |
+| Layout | 2-column: 256px sidebar + flexible main. No separate event stream or right panel — everything in the chat view. |
+| Logs | `backend/logging/taskLogger.ts` → `<repo>/.grist/logs/job-N/task-N.jsonl` (JSONL per task). `.grist` auto-added to `.gitignore`. |
 
 ## Contracts / invariants
 
-- **One tool call per model turn** — `WorkerDecisionSchema` in `backend/types/taskState.ts`.
+- **LLM planner** — `planner.ts` scans repo (file list), sends context to LLM, which decides task count/type/deps. Primary objective: minimize wall-clock time. Post-validation enforces parallelism rules: empty repos → 1 task, small repos (<30 files) → consolidated, parallel impl tasks merged (write conflicts). Falls back to sensible defaults on LLM failure. All reasoning logged as job-level events.
+- **Parallel tool calls** — Workers support `call_tool` (single) and `call_tools` (parallel array). `WorkerDecisionSchema` in `backend/types/taskState.ts`. Parallel calls run via `Promise.all`. Normalizer accepts alternate field names `tool`/`args`/`reasoning` → `tool_name`/`tool_args`/`reasoning_summary`.
+- **maxTokens** — write-capable tasks get `8192` tokens; read-only get `2048`. Prevents truncated `write_file` JSON when creating large files.
+- **Truncated response recovery** — if `finishReason === "length"`, worker tries to extract tool_name and tool_args from partial JSON instead of failing immediately.
+- **Smart history** — `write_file`/`apply_patch` results summarized as success/fail in history (model already knows contents). Other results get up to 3000 chars.
 - **Tool allowlist** — `task.allowed_tools_json`; `run_command_safe` / `run_tests` also gated by `settings.commandAllowlist` (defaults in `appSettings.ts`).
 - **Writes** — `write_file` / `apply_patch` only under `task.worktree_path` when set.
 - **Events** — tool calls and orchestration should call `insertEvent` (worker emits via `ToolContext.emit`).
+- **Conversation history** — worker prompt includes previous tool calls + results so the model can iterate instead of repeating. System prompt tells model not to re-read files it just wrote.
+- **Auto-pause** — workers auto-pause after: (a) 3× identical tool call, (b) 5 consecutive tool errors, (c) 3 steps with empty tool name. Emits `auto_pause` event + toast banner in UI via `AutoPauseBanner.tsx`.
 - **Pause** — job-level pause: workers spin until `job.status !== 'paused'`; task-level pause: same + `task.status === 'paused'`. **Stop** aborts in-flight work via `AbortController`.
 
 ## Provider env / settings
@@ -61,10 +72,8 @@ SQLite `settings` table **or** repo-root **`.env`** (gitignored; see `.env.examp
 
 ## Known gaps / follow-ups
 
-- Planner is **template-based** (no LLM call yet); `planner_model_provider` on job is reserved for a future LLM planner.
 - **Command palette** and **open in editor** not implemented.
 - Reducer/verifier need real providers for useful output; **mock** provider drives deterministic CI/offline loops.
-- Auto-merge of competing patches: **not** implemented (by design).
 
 ## Implementation log (running)
 

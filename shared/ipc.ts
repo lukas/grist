@@ -17,6 +17,8 @@ export const IPC = {
   getTasks: "grist:getTasks",
   getArtifacts: "grist:getArtifacts",
   getEvents: "grist:getEvents",
+  getTaskEvents: "grist:getTaskEvents",
+  getJobLevelEvents: "grist:getJobLevelEvents",
   getSettings: "grist:getSettings",
   setSettings: "grist:setSettings",
   taskControl: "grist:taskControl",
@@ -26,6 +28,8 @@ export const IPC = {
   spawnVerifier: "grist:spawnVerifier",
   snapshot: "grist:snapshot",
   openPath: "grist:openPath",
+  logsDir: "grist:logsDir",
+  taskLog: "grist:taskLog",
   subscribe: "grist:subscribe",
   /** Main → renderer push (orchestrator updates). */
   events: "grist:events",

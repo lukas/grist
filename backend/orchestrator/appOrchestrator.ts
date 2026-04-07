@@ -1,8 +1,9 @@
 import { copyFileSync, existsSync } from "node:fs";
+import { ensureGristDir } from "../logging/taskLogger.js";
 import { insertJob, getJob, updateJob, listJobs } from "../db/jobRepo.js";
 import { insertTask, updateTask, getTask, listTasksForJob } from "../db/taskRepo.js";
 import { listArtifactsForJob } from "../db/artifactRepo.js";
-import { listEvents } from "../db/eventRepo.js";
+import { listEvents, listEventsForTask, listJobLevelEvents } from "../db/eventRepo.js";
 import { insertEvent } from "../db/eventRepo.js";
 import { runPlanner } from "./planner.js";
 import { runSchedulerTick } from "./scheduler.js";
@@ -49,6 +50,7 @@ export class GristOrchestrator {
     verifierProvider?: ModelProviderName;
   }): number {
     const d = input.defaultProvider || "mock";
+    ensureGristDir(input.repoPath);
     return insertJob({
       repo_path: input.repoPath,
       user_goal: input.goal,
@@ -62,10 +64,10 @@ export class GristOrchestrator {
     });
   }
 
-  planJob(jobId: number): void {
+  async planJob(jobId: number): Promise<void> {
     const job = getJob(jobId);
     if (!job) return;
-    runPlanner(job, this.appWorkspaceRoot);
+    await runPlanner(job, this.appWorkspaceRoot);
     this.emit("planner_done", jobId);
   }
 
@@ -79,6 +81,8 @@ export class GristOrchestrator {
           this.aborts.set(taskId, ac);
           const p = runTaskWorker(taskId, ac.signal, this.appWorkspaceRoot, (msg) => {
             this.emit("duplicate_hint", jobId, taskId, { msg });
+          }, (kind, jId, tId, data) => {
+            this.emit(kind, jId, tId, data);
           })
             .catch((e) => {
               insertEvent({
@@ -359,6 +363,14 @@ export class GristOrchestrator {
       artifacts: listArtifactsForJob(jobId),
       events: listEvents(jobId, 400),
     };
+  }
+
+  taskEvents(jobId: number, taskId: number) {
+    return listEventsForTask(jobId, taskId, 500);
+  }
+
+  jobLevelEvents(jobId: number) {
+    return listJobLevelEvents(jobId, 500);
   }
 
   listAllJobs() {

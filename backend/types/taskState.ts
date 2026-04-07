@@ -1,12 +1,19 @@
 import { z } from "zod";
 
-/** Spec §9 structured worker decision (one tool per iteration). */
+const ToolCallSchema = z.object({
+  tool_name: z.string(),
+  tool_args: z.record(z.unknown()).optional().default({}),
+});
+
 export const WorkerDecisionSchema = z.object({
-  decision: z.enum(["call_tool", "finish", "pause_self"]),
+  decision: z.enum(["call_tool", "call_tools", "finish", "pause_self"]),
   reasoning_summary: z.string().optional().default(""),
   expected_information_gain: z.number().optional(),
+  // Single tool call (call_tool)
   tool_name: z.string().optional(),
   tool_args: z.record(z.unknown()).optional(),
+  // Parallel tool calls (call_tools)
+  tool_calls: z.array(ToolCallSchema).optional(),
   artifact: z
     .object({
       type: z.string(),

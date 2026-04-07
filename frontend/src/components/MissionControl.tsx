@@ -12,15 +12,13 @@ type Props = {
   onPickRepo: () => void;
   onCreateRun: () => void;
   onOpenSettings: () => void;
-  view: "table" | "dag";
-  onViewChange: (v: "table" | "dag") => void;
 };
 
-const PROVIDER_COLORS: Record<string, string> = {
-  claude: "bg-orange-700",
-  codex: "bg-green-700",
-  kimi: "bg-blue-700",
-  mock: "bg-gray-600",
+const PROVIDER_DOT: Record<string, string> = {
+  claude: "bg-orange-400",
+  codex: "bg-green-400",
+  kimi: "bg-blue-400",
+  mock: "bg-gray-400",
 };
 
 export function MissionControl({
@@ -35,123 +33,102 @@ export function MissionControl({
   onPickRepo,
   onCreateRun,
   onOpenSettings,
-  view,
-  onViewChange,
 }: Props) {
   const [job, setJob] = useState<Record<string, unknown> | null>(null);
-  const [started, setStarted] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!jobId) {
-      setJob(null);
-      return;
-    }
+    if (!jobId) { setJob(null); return; }
     void window.grist.getJob(jobId).then((j) => setJob(j as Record<string, unknown>));
   }, [jobId, tick]);
 
-  const elapsed = started ? Math.floor((Date.now() - started) / 1000) : 0;
-
   const tryCreateRun = () => {
     if (!goal.trim()) return;
-    setStarted(Date.now());
     void onCreateRun();
   };
 
-  const onGoalOrNotesKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    tryCreateRun();
+  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") { e.preventDefault(); tryCreateRun(); }
   };
 
   return (
-    <header className="flex flex-wrap items-center gap-3 border-b border-border bg-[#121922] px-3 py-2 text-sm">
-      <h1 className="text-base font-semibold text-white">Grist</h1>
-      <button type="button" className="rounded bg-accent px-2 py-1 text-white" onClick={onPickRepo}>
-        Repo…
-      </button>
-      <span className="max-w-xs truncate text-muted" title={repo || "none"}>
-        {repo || "no repo"}
-      </span>
-      <input
-        className="min-w-[200px] flex-1 rounded border border-border bg-panel px-2 py-1"
-        placeholder="Goal (e.g. find flaky auth tests)"
-        value={goal}
-        onChange={(e) => onGoalChange(e.target.value)}
-        onKeyDown={onGoalOrNotesKeyDown}
-      />
-      <input
-        className="w-48 rounded border border-border bg-panel px-2 py-1 text-xs"
-        placeholder="Operator notes / constraints"
-        value={notes}
-        onChange={(e) => onNotesChange(e.target.value)}
-        onKeyDown={onGoalOrNotesKeyDown}
-      />
+    <header className="flex items-center gap-2 border-b border-border/50 bg-[#0e1420] px-3 py-1.5 text-xs">
+      <span className="text-sm font-semibold text-white">Grist</span>
+
       <button
         type="button"
-        className="rounded bg-emerald-600 px-2 py-1 text-white disabled:opacity-40"
+        className="truncate rounded px-1.5 py-0.5 text-muted hover:bg-white/5 hover:text-white"
+        onClick={onPickRepo}
+        title={repo || "Pick repo"}
+      >
+        {repo ? repo.split("/").slice(-2).join("/") : "repo…"}
+      </button>
+
+      <input
+        className="min-w-[180px] flex-1 rounded border border-border/40 bg-transparent px-2 py-1 text-gray-100 placeholder:text-gray-600 focus:border-accent focus:outline-none"
+        placeholder="Goal…"
+        value={goal}
+        onChange={(e) => onGoalChange(e.target.value)}
+        onKeyDown={onKey}
+      />
+      <input
+        className="w-36 rounded border border-border/40 bg-transparent px-2 py-1 text-gray-300 placeholder:text-gray-600 focus:border-accent focus:outline-none"
+        placeholder="Notes…"
+        value={notes}
+        onChange={(e) => onNotesChange(e.target.value)}
+        onKeyDown={onKey}
+      />
+
+      <button
+        type="button"
+        className="rounded bg-emerald-600 px-2.5 py-1 text-white disabled:opacity-30"
         disabled={!goal.trim()}
         onClick={tryCreateRun}
       >
-        Plan &amp; run
+        Run
       </button>
-      <button type="button" className="flex items-center gap-1.5 rounded border border-border px-2 py-1" onClick={onOpenSettings}>
-        <span className={`inline-block h-2 w-2 rounded-full ${PROVIDER_COLORS[provider] ?? "bg-gray-600"}`} />
-        <span>{provider || "provider"}</span>
-      </button>
-      <select
-        className="rounded border border-border bg-panel px-1 py-1"
-        value={view}
-        onChange={(e) => onViewChange(e.target.value as "table" | "dag")}
+
+      <button
+        type="button"
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted hover:bg-white/5 hover:text-white"
+        onClick={onOpenSettings}
       >
-        <option value="table">Table</option>
-        <option value="dag">DAG (deps)</option>
-      </select>
+        <span className={`inline-block h-1.5 w-1.5 rounded-full ${PROVIDER_DOT[provider] ?? "bg-gray-500"}`} />
+        {provider || "provider"}
+      </button>
+
       {job && (
-        <>
-          <span className="text-muted">status: {String(job.status)}</span>
-          <span className="text-muted">tokens: {String(job.total_tokens_used ?? 0)}</span>
-          <span className="text-muted">~$ {Number(job.total_estimated_cost ?? 0).toFixed(4)}</span>
-          <span className="text-muted">{elapsed}s</span>
-        </>
+        <span className="text-muted">
+          {String(job.status)} · {String(job.total_tokens_used ?? 0)} tok
+        </span>
       )}
+
       {jobId && (
-        <>
+        <div className="flex gap-1">
           <button
             type="button"
-            className="rounded bg-amber-700 px-2 py-1 text-white"
+            className="rounded px-1.5 py-0.5 text-amber-400 hover:bg-amber-900/30"
             onClick={() => void window.grist.jobControl({ type: "pause_all", jobId })}
+            title="Pause all"
           >
-            Pause all
+            ⏸
           </button>
           <button
             type="button"
-            className="rounded bg-emerald-800 px-2 py-1 text-white"
+            className="rounded px-1.5 py-0.5 text-emerald-400 hover:bg-emerald-900/30"
             onClick={() => void window.grist.jobControl({ type: "resume_all", jobId })}
+            title="Resume all"
           >
-            Resume all
+            ▶
           </button>
           <button
             type="button"
-            className="rounded bg-violet-700 px-2 py-1 text-white"
-            onClick={() => void window.grist.jobControl({ type: "summarize_now", jobId })}
-          >
-            Summarize now
-          </button>
-          <button
-            type="button"
-            className="rounded bg-red-800 px-2 py-1 text-white"
+            className="rounded px-1.5 py-0.5 text-red-400 hover:bg-red-900/30"
             onClick={() => void window.grist.jobControl({ type: "stop_run", jobId })}
+            title="Stop run"
           >
-            Stop run
+            ■
           </button>
-          <button
-            type="button"
-            className="rounded border border-border px-2 py-1"
-            onClick={() => void window.grist.runReducerNow(jobId)}
-          >
-            Reducer only
-          </button>
-        </>
+        </div>
       )}
     </header>
   );

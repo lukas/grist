@@ -22,6 +22,8 @@ const api = {
   getTasks: (jobId: number) => ipcRenderer.invoke(IPC.getTasks, jobId),
   getArtifacts: (jobId: number) => ipcRenderer.invoke(IPC.getArtifacts, jobId),
   getEvents: (jobId: number) => ipcRenderer.invoke(IPC.getEvents, jobId),
+  getTaskEvents: (jobId: number, taskId: number) => ipcRenderer.invoke(IPC.getTaskEvents, jobId, taskId),
+  getJobLevelEvents: (jobId: number) => ipcRenderer.invoke(IPC.getJobLevelEvents, jobId),
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   setSettings: (p: Record<string, unknown>) => ipcRenderer.invoke(IPC.setSettings, p),
   taskControl: (a: TaskControlAction) => ipcRenderer.invoke(IPC.taskControl, a),
@@ -31,6 +33,8 @@ const api = {
   spawnVerifier: (jobId: number, patchTaskId: number) =>
     ipcRenderer.invoke(IPC.spawnVerifier, jobId, patchTaskId),
   openPath: (p: string) => ipcRenderer.invoke(IPC.openPath, p) as Promise<string>,
+  logsDir: (jobId: number) => ipcRenderer.invoke(IPC.logsDir, jobId) as Promise<string>,
+  taskLog: (jobId: number, taskId: number) => ipcRenderer.invoke(IPC.taskLog, jobId, taskId) as Promise<string>,
   onEvent: (cb: (e: GristEvent) => void) => {
     const handler = (_: Electron.IpcRendererEvent, payload: GristEvent) => cb(payload);
     ipcRenderer.on(IPC.events, handler);

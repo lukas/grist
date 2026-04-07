@@ -23,3 +23,15 @@ export function listEvents(jobId: number, limit = 500) {
     .prepare("SELECT * FROM events WHERE job_id = ? ORDER BY id DESC LIMIT ?")
     .all(jobId, limit);
 }
+
+export function listEventsForTask(jobId: number, taskId: number, limit = 500) {
+  return getDb()
+    .prepare("SELECT * FROM events WHERE job_id = ? AND task_id = ? ORDER BY id DESC LIMIT ?")
+    .all(jobId, taskId, limit);
+}
+
+export function listJobLevelEvents(jobId: number, limit = 500) {
+  return getDb()
+    .prepare("SELECT * FROM events WHERE job_id = ? AND task_id IS NULL ORDER BY id DESC LIMIT ?")
+    .all(jobId, limit);
+}

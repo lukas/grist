@@ -38,6 +38,9 @@ Default model provider is **mock** (no API keys). Set providers under **Provider
 | 2026-04-06 | **`.env`:** gitignored repo-root `.env` loaded on startup; `GRIST_KIMI_*` + `GRIST_DEFAULT_PROVIDER`; DB settings override env when set. |
 | 2026-04-06 | **Mission bar:** **Enter** in goal or notes triggers **Plan & run**. No repo? **RepoDialog** opens (recent repos, browse, paste, create new via git init). |
 | 2026-04-06 | **Electron main:** `dotenv` is **esbuild external** so the ESM main bundle does not inline CJS `require("fs")` (avoids startup crash). |
+| 2026-04-06 | **Agent loop fixes:** Normalize alt LLM field names (`tool`→`tool_name`, `args`→`tool_args`). Conversation history in prompts. Auto-pause on 3× identical call, 5 consecutive errors, or 3 empty tool names. `AutoPauseBanner` toast in UI. |
+| 2026-04-06 | **Logs in repo:** JSONL logs now saved to `<repo>/.grist/logs/` (auto-gitignored). Planner view in task list shows job-level events. **History** dropdown in MissionControl to browse/reload old jobs. Most recent job auto-loaded on startup. |
+| 2026-04-06 | **LLM planner:** Planner now calls the LLM with repo file listing + goal context. Creates appropriate tasks (analysis vs implementation) based on the model's reasoning. Empty repos get implementation tasks, existing codebases get analysis. All planner thinking visible in Planner view. Fallback to template plan on LLM error. |
 
 ## Spec
 

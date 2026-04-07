@@ -20,6 +20,8 @@ declare global {
       getTasks(jobId: number): Promise<unknown[]>;
       getArtifacts(jobId: number): Promise<unknown[]>;
       getEvents(jobId: number): Promise<unknown[]>;
+      getTaskEvents(jobId: number, taskId: number): Promise<unknown[]>;
+      getJobLevelEvents(jobId: number): Promise<unknown[]>;
       getSettings(): Promise<Record<string, unknown>>;
       setSettings(p: Record<string, unknown>): Promise<boolean>;
       taskControl(a: TaskControlAction): Promise<boolean>;
@@ -28,6 +30,8 @@ declare global {
       spawnPatchTask(jobId: number, goal: string): Promise<number | null>;
       spawnVerifier(jobId: number, patchTaskId: number): Promise<number | null>;
       openPath(p: string): Promise<string>;
+      logsDir(jobId: number): Promise<string>;
+      taskLog(jobId: number, taskId: number): Promise<string>;
       onEvent(cb: (e: { kind: string; jobId?: number; taskId?: number; data?: unknown }) => void): () => void;
     };
   }

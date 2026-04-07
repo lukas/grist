@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, nativeImage } from "electron";
 import { existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { openDatabase, closeDatabase, getDb } from "../backend/db/db.js";
+import { repoLogsDir, readTaskLog, ensureGristDir } from "../backend/logging/taskLogger.js";
 import { loadDotenvFile } from "../backend/settings/loadDotenv.js";
 import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { IPC } from "../shared/ipc.js";
@@ -13,6 +14,8 @@ import type { TaskControlAction, JobControlAction } from "../shared/ipc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
+
+app.name = "Grist";
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: GristOrchestrator;
@@ -27,6 +30,13 @@ function createWindow(): void {
     console.error("Preload missing at", preloadPath);
   }
 
+  const iconPath = join(__dirname, "..", "assets", "icon.png");
+  const appIcon = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined;
+
+  if (appIcon && process.platform === "darwin") {
+    app.dock.setIcon(appIcon);
+  }
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -36,6 +46,7 @@ function createWindow(): void {
       nodeIntegration: false,
     },
     title: "Grist",
+    icon: appIcon,
   });
 
   mainWindow.webContents.on("preload-error", (_event, path, err) => {
@@ -132,8 +143,8 @@ function registerIpc(): void {
     return true;
   });
 
-  ipcMain.handle(IPC.runPlanner, (_, jobId: number) => {
-    orchestrator.planJob(jobId);
+  ipcMain.handle(IPC.runPlanner, async (_, jobId: number) => {
+    await orchestrator.planJob(jobId);
     return true;
   });
 
@@ -150,6 +161,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.getTasks, (_, jobId: number) => orchestrator.snapshot(jobId).tasks);
   ipcMain.handle(IPC.getArtifacts, (_, jobId: number) => orchestrator.snapshot(jobId).artifacts);
   ipcMain.handle(IPC.getEvents, (_, jobId: number) => orchestrator.snapshot(jobId).events);
+  ipcMain.handle(IPC.getTaskEvents, (_, jobId: number, taskId: number) => orchestrator.taskEvents(jobId, taskId));
+  ipcMain.handle(IPC.getJobLevelEvents, (_, jobId: number) => orchestrator.jobLevelEvents(jobId));
 
   ipcMain.handle(IPC.getSettings, () => loadAppSettings());
   ipcMain.handle(IPC.setSettings, (_, p: Record<string, unknown>) => {
@@ -181,6 +194,17 @@ function registerIpc(): void {
   ipcMain.handle(IPC.snapshot, (_, jobId: number) => orchestrator.snapshot(jobId));
 
   ipcMain.handle(IPC.openPath, (_, p: string) => shell.openPath(p));
+
+  ipcMain.handle(IPC.logsDir, (_, jobId: number) => {
+    const job = orchestrator.listAllJobs().find((j) => j.id === jobId);
+    return job ? repoLogsDir(job.repo_path) : "";
+  });
+
+  ipcMain.handle(IPC.taskLog, (_, jobId: number, taskId: number) => {
+    const job = orchestrator.listAllJobs().find((j) => j.id === jobId);
+    if (!job) return "";
+    return readTaskLog(job.repo_path, jobId, taskId);
+  });
 }
 
 app.whenReady().then(() => {
