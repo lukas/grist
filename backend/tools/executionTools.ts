@@ -6,6 +6,22 @@ function isAllowed(command: string, allowlist: string[]): boolean {
   for (const entry of allowlist) {
     if (c === entry || c.startsWith(entry + " ")) return true;
   }
+  // Allow wrapper commands (timeout, env, nice) if the inner command is allowed
+  const wrapperMatch = c.match(/^(?:timeout|env|nice|nohup)\s+(?:\S+\s+)*?(\S+.*)/);
+  if (wrapperMatch) {
+    const inner = wrapperMatch[1];
+    for (const entry of allowlist) {
+      if (inner === entry || inner.startsWith(entry + " ")) return true;
+    }
+  }
+  // Allow piped/redirected commands if the base command is allowed
+  const pipeMatch = c.match(/^([^|<>&;]+)/);
+  if (pipeMatch && pipeMatch[1].trim() !== c) {
+    const base = pipeMatch[1].trim();
+    for (const entry of allowlist) {
+      if (base === entry || base.startsWith(entry + " ")) return true;
+    }
+  }
   return false;
 }
 

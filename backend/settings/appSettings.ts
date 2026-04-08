@@ -19,7 +19,18 @@ export interface AppSettings {
   appWorkspaceRoot?: string;
 }
 
-const DEFAULT_ALLOWLIST = ["npm test", "pnpm test", "yarn test", "make test", "pytest", "go test ./..."];
+const DEFAULT_ALLOWLIST = [
+  "npm test", "pnpm test", "yarn test", "make test", "pytest", "go test",
+  "npm run", "npm start", "npx", "pnpm run", "yarn run",
+  "node", "python", "python3",
+  "make", "cargo run", "cargo build", "go run", "go build",
+  "open", "cat", "ls", "head", "tail", "wc", "find", "which", "echo", "printf",
+  "git status", "git diff", "git log", "git show", "git branch",
+  "curl", "wget",
+  "timeout", "env", "xargs", "sort", "uniq", "grep", "awk", "sed",
+  "tsc", "eslint", "prettier", "rustfmt", "cargo fmt", "cargo clippy",
+  "pip install", "npm install", "pnpm install", "yarn install",
+];
 
 function pick<T>(dbVal: T | undefined, envVal: T | undefined): T | undefined {
   if (dbVal !== undefined && dbVal !== null && dbVal !== "") return dbVal as T;

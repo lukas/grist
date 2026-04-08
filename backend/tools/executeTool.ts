@@ -17,6 +17,7 @@ import {
   toolWriteFile,
 } from "./patchTools.js";
 import { toolEmitProgress, toolPauseSelf } from "./controlTools.js";
+import { toolWriteMemory, toolReadMemory } from "./memoryTools.js";
 
 export async function executeTool(
   name: string,
@@ -69,6 +70,10 @@ export async function executeTool(
       return toolEmitProgress(ctx, args as { message: string; data?: unknown });
     case "pause_self":
       return toolPauseSelf(ctx, args as { reason?: string });
+    case "write_memory":
+      return toolWriteMemory(ctx, args as { content: string; scope?: string; title?: string });
+    case "read_memory":
+      return toolReadMemory(ctx, args as { scope?: string; file?: string });
     default:
       return { ok: false, error: `Unknown tool: ${name}` };
   }

@@ -86,30 +86,20 @@ Task types:
 - "analysis": read-only (list_files, read_file, grep_code, read_git_history). For investigating existing code.
 - "implementation": read+write (write_file, apply_patch, run_command_safe, etc). For creating/modifying code.
 
-CRITICAL RULES FOR EMPTY/NEW REPOS:
-- When the repo is empty or has very few files, use a SINGLE implementation task.
-- Multiple parallel implementation tasks on an empty repo will all start by exploring and then create conflicting files.
-- Only split into multiple tasks when there are EXISTING files to parallelize against.
+PARALLELISM STRATEGY — always look for parallelism opportunities:
 
-PARALLELISM RULES for repos with existing code:
+For EMPTY repos (greenfield):
+- If the goal describes multiple components/modules (e.g. "chess engine + AI + display"), split into 2-4 PARALLEL implementation tasks, each writing to separate files/directories.
+- ALWAYS create a brief "architect" task first (depends_on:[]) with max_steps:5 that defines shared interfaces/types in a shared file. Then fan out parallel implementation tasks (depends_on:[0]) that each build one module.
+- Example: goal "build chess game" → architect (defines interfaces), then parallel: rules_engine, ai_engine, display_cli, main_game_loop.
+- Each task MUST specify scope.files listing which files it owns to avoid write conflicts.
+- Only use 1 task if the goal is genuinely trivial (< 50 lines of code expected).
+
+For EXISTING repos:
 - PARALLEL analysis tasks on separate parts of a large codebase (>20 files)
-- SEQUENTIAL: analysis → implementation (depends_on) when you need to understand before changing
-- PARALLEL implementation tasks ONLY when tasks modify SEPARATE, INDEPENDENT files that don't import each other
-- SEQUENTIAL (depends_on) when one task creates a module that another imports
-
-When to use 1 task:
-- Empty or small repo (< 10 files) — always prefer a single implementation task
-- Single focused deliverable
-- Trivial changes (rename, fix typo, add comment)
-- Project where components import each other (game logic + display = 1 task, not 2)
-
-When to use 2+ SEQUENTIAL tasks:
-- "Analyze then fix" → analysis depends_on:[], implementation depends_on:[0]
-- Multi-phase work where phase 2 reads phase 1's output
-
-When to use 2+ PARALLEL tasks:
-- Large repo with truly independent changes to separate files/modules
-- Goal explicitly mentions multiple independent deliverables with no shared imports
+- PARALLEL implementation tasks ONLY when they write to entirely different directories/files
+- SEQUENTIAL (depends_on) when one task needs output of another
+- Small repo (<10 files) with a focused goal → 1-2 tasks
 
 Respond ONLY with JSON:
 {
@@ -117,15 +107,16 @@ Respond ONLY with JSON:
   "tasks": [
     {
       "role": "short_name",
-      "goal": "specific goal",
+      "goal": "specific goal including which files to create/modify",
       "type": "analysis" | "implementation",
-      "scope": {"area": "optional"},
+      "scope": {"files": ["specific/files.js"], "area": "optional"},
       "max_steps": 20,
       "depends_on": []
     }
   ]
 }
-depends_on is 0-indexed into your tasks array. Tasks without depends_on run in parallel.`;
+depends_on is 0-indexed into your tasks array. Tasks without depends_on run in parallel.
+IMPORTANT: For multi-component projects, prefer 3-5 parallel tasks over 1 monolithic task. Each task should specify which files it owns in scope.files to avoid write conflicts.`;
 
   const filesSummary = isEmpty
     ? "The repository is EMPTY (no files). This is a brand new project."
@@ -153,9 +144,18 @@ function parseLLMPlan(text: string): LLMPlan | null {
 }
 
 function fallbackPlan(goal: string, isEmpty: boolean, fileCount: number): LLMPlan {
-  if (isEmpty || fileCount <= 30) {
+  if (isEmpty) {
     return {
-      reasoning: `${isEmpty ? "Empty" : "Small"} repo — single implementation task.`,
+      reasoning: "Empty repo — architect defines structure, then implementer builds it.",
+      tasks: [
+        { role: "architect", goal: `Define module structure and shared interfaces for: ${goal}. Create a brief ARCHITECTURE.md and any shared type/config files.`, type: "implementation", max_steps: 5, scope: { files: ["ARCHITECTURE.md", "types.js"] } },
+        { role: "implementer", goal: `Build the full project: ${goal}`, type: "implementation", max_steps: 40, depends_on: [0] },
+      ],
+    };
+  }
+  if (fileCount <= 30) {
+    return {
+      reasoning: `Small repo (${fileCount} files) — single implementation task.`,
       tasks: [{
         role: "developer",
         goal,
@@ -177,34 +177,37 @@ function validateParallelism(plan: LLMPlan, isEmpty: boolean, fileCount: number)
   const tasks = plan.tasks;
   if (tasks.length <= 1) return plan;
 
-  // On empty or small repos, consolidate parallel impl tasks into one.
-  // Multiple parallel impl tasks on an empty repo just duplicate exploration and create conflicts.
-  if (isEmpty || fileCount < 10) {
-    const implTasks = tasks.filter((t) => t.type === "implementation" && (!t.depends_on || t.depends_on.length === 0));
-    if (implTasks.length > 1) {
-      const mergedGoal = implTasks.map((t) => t.goal).join("; ");
-      const otherTasks = tasks.filter((t) => t.type !== "implementation" || (t.depends_on && t.depends_on.length > 0));
-      return {
-        reasoning: `${plan.reasoning} [Merged ${implTasks.length} parallel impl tasks into 1 — repo is ${isEmpty ? "empty" : "small"}]`,
-        tasks: [
-          ...otherTasks,
-          {
-            role: "developer",
-            goal: mergedGoal,
-            type: "implementation",
-            max_steps: 30,
-            depends_on: otherTasks.length > 0 ? [0] : undefined,
-          },
-        ],
-      };
-    }
-  }
-
-  // Cap at 6 parallel tasks to avoid resource exhaustion
+  // Cap at 6 tasks max to avoid oversubscription
   if (tasks.length > 6) {
     return {
       reasoning: `${plan.reasoning} [Capped from ${tasks.length} to 6 tasks]`,
       tasks: tasks.slice(0, 6),
+    };
+  }
+
+  // If parallel implementation tasks specify different scope.files, allow them
+  const parallelImpl = tasks.filter((t) => t.type === "implementation" && (!t.depends_on || t.depends_on.length === 0));
+  if (parallelImpl.length > 1) {
+    const allHaveScope = parallelImpl.every((t) => {
+      const scope = t.scope as Record<string, unknown> | undefined;
+      return scope?.files && Array.isArray(scope.files) && (scope.files as string[]).length > 0;
+    });
+    if (allHaveScope) {
+      return plan;
+    }
+    // No scopes — merge to avoid write conflicts (safety)
+    const implGoal = parallelImpl.map((t) => t.goal).join("; ");
+    const otherTasks = tasks.filter((t) => !(t.type === "implementation" && (!t.depends_on || t.depends_on.length === 0)));
+    const mergedImpl = {
+      role: "implementer",
+      goal: implGoal,
+      type: "implementation" as const,
+      max_steps: Math.max(...parallelImpl.map((t) => t.max_steps || 20), 30),
+      depends_on: otherTasks.length > 0 ? otherTasks.map((_: unknown, i: number) => i) : undefined as number[] | undefined,
+    };
+    return {
+      reasoning: `${plan.reasoning} [Merged ${parallelImpl.length} parallel impl tasks — no scope.files specified]`,
+      tasks: [...otherTasks, mergedImpl],
     };
   }
 
