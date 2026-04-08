@@ -100,4 +100,6 @@ export const ALL_TOOL_NAMES = [
   "remove_worktree",
   "emit_progress_event",
   "pause_self",
+  "write_memory",
+  "read_memory",
 ] as const;

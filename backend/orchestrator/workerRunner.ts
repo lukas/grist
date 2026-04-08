@@ -243,8 +243,16 @@ export async function runTaskWorker(
     if (task.status !== "running") break;
 
     if (task.steps_used >= task.max_steps) {
-      updateTask(taskId, { status: "paused", blocker: `max_steps exceeded (${task.steps_used}/${task.max_steps})`, next_action: "operator" });
-      emit("warn", "budget", `max_steps exceeded — ${task.steps_used}/${task.max_steps} steps used, model: ${row.assigned_model_provider}`, { steps: task.steps_used, max_steps: task.max_steps, model: row.assigned_model_provider });
+      // Check if any files were written — if so, mark as done so dependents can proceed
+      const filesExamined = JSON.parse(task.files_examined_json || "[]") as string[];
+      const hasOutput = history.some((h) => h.role === "tool_result" && /write_file: success|apply_patch: success/.test(h.content));
+      if (hasOutput) {
+        updateTask(taskId, { status: "done", blocker: `max_steps reached (completed with output)` });
+        emit("info", "budget", `max_steps reached — marking done (wrote files)`, { steps: task.steps_used, max_steps: task.max_steps });
+      } else {
+        updateTask(taskId, { status: "paused", blocker: `max_steps exceeded (${task.steps_used}/${task.max_steps})`, next_action: "operator" });
+        emit("warn", "budget", `max_steps exceeded — ${task.steps_used}/${task.max_steps} steps used`, { steps: task.steps_used, max_steps: task.max_steps });
+      }
       break;
     }
     if (task.tokens_used >= task.max_tokens) {
