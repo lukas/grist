@@ -53,7 +53,7 @@ Everything is a **task**. The old "jobs" table is kept internally but hidden beh
 | Tools | `backend/tools/executeTool.ts`, `memoryTools.ts`, `controlTools.ts` |
 | Memory | `backend/memory/memoryManager.ts` — `~/.grist/` (global) + `<repo>/.grist/` (project) |
 | Reflection | `backend/orchestrator/reflection.ts` — async post-task learning distillation |
-| React UI | `frontend/src/App.tsx`, `frontend/src/components/*` |
+| React UI | `frontend/src/App.tsx`, `frontend/src/components/*` (incl. `MemoryDrawer`, `MemoryViewer`) |
 
 ### Frontend → IPC API
 

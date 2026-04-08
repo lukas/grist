@@ -6,6 +6,8 @@ import { NewTaskForm } from "./components/NewTaskForm";
 import { SettingsModal } from "./components/SettingsModal";
 import { RepoDialog } from "./components/RepoDialog";
 import { AutoPauseBanner } from "./components/AutoPauseBanner";
+import { MemoryDrawer } from "./components/MemoryDrawer";
+import { MemoryViewer } from "./components/MemoryViewer";
 
 export default function App() {
   const [repo, setRepo] = useState("");
@@ -16,6 +18,8 @@ export default function App() {
   const [repoDialogOpen, setRepoDialogOpen] = useState(false);
   const [provider, setProvider] = useState("");
   const [pauseWarnings, setPauseWarnings] = useState<{ taskId: number; message: string }[]>([]);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memorySel, setMemorySel] = useState<MemorySelection | null>(null);
 
   const refresh = useCallback(() => setTick((x) => x + 1), []);
 
@@ -117,7 +121,21 @@ export default function App() {
   const dismissWarning = (idx: number) =>
     setPauseWarnings((prev) => prev.filter((_, i) => i !== idx));
 
-  const showNewTaskForm = selectedTaskId == null;
+  const selectMemory = (sel: MemorySelection) => {
+    setMemorySel(sel);
+    setSelectedTaskId(null);
+  };
+
+  const closeMemoryViewer = () => {
+    setMemorySel(null);
+  };
+
+  const selectTask = (id: number) => {
+    setSelectedTaskId(id);
+    setMemorySel(null);
+  };
+
+  const showNewTaskForm = selectedTaskId == null && memorySel == null;
 
   return (
     <div className="flex h-screen flex-col bg-panel text-gray-100">
@@ -134,6 +152,8 @@ export default function App() {
         onSelectRepo={switchRepo}
         onPickRepo={openRepoDialog}
         onOpenSettings={() => setSettingsOpen(true)}
+        memoryOpen={memoryOpen}
+        onToggleMemory={() => setMemoryOpen((v) => !v)}
       />
       <div className="flex min-h-0 flex-1">
         <div className="w-64 shrink-0 overflow-hidden border-r border-border/50 bg-panel p-2">
@@ -142,12 +162,14 @@ export default function App() {
             rootTaskId={rootTaskId}
             tick={tick}
             selectedId={selectedTaskId}
-            onSelect={setSelectedTaskId}
+            onSelect={selectTask}
             onLoadRootTask={loadTask}
           />
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-panel">
-          {showNewTaskForm ? (
+          {memorySel ? (
+            <MemoryViewer selection={memorySel} repo={repo} onClose={closeMemoryViewer} />
+          ) : showNewTaskForm ? (
             <NewTaskForm
               repo={repo}
               onCreateRun={startRun}
@@ -157,6 +179,16 @@ export default function App() {
             <TaskDetail rootTaskId={rootTaskId} taskId={selectedTaskId} tick={tick} onRefresh={refresh} />
           )}
         </div>
+        {memoryOpen && (
+          <div className="w-56 shrink-0 overflow-hidden border-l border-border/50 bg-[#0e1420]">
+            <MemoryDrawer
+              repo={repo}
+              tick={tick}
+              selected={memorySel}
+              onSelect={selectMemory}
+            />
+          </div>
+        )}
       </div>
       {settingsOpen && <SettingsModal onClose={() => { setSettingsOpen(false); loadProvider(); }} />}
       {repoDialogOpen && (

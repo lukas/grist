@@ -9,6 +9,7 @@ import { loadDotenvFile } from "../backend/settings/loadDotenv.js";
 import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { IPC } from "../shared/ipc.js";
 import { getSetting, setSetting, loadAppSettings, saveAppSettingsPatch } from "../backend/settings/appSettings.js";
+import { getFullMemoryData, readHomeMemoryFile, readRepoMemoryFile, writeHomeSummary, writeRepoSummary } from "../backend/memory/memoryManager.js";
 import { createRootTask, listRootTasks, getRootTask, rootTaskToJobId, getChildTasks } from "../backend/db/rootTaskFacade.js";
 import { insertEvent, listEventsByTaskId, listEvents } from "../backend/db/eventRepo.js";
 import { getTask } from "../backend/db/taskRepo.js";
@@ -211,6 +212,24 @@ function registerIpc(): void {
   ipcMain.handle(IPC.setSettings, (_, p: Record<string, unknown>) => {
     saveAppSettingsPatch(p as never);
     return true;
+  });
+
+  // --- Memory ---
+
+  ipcMain.handle(IPC.getMemory, (_, repoPath: string) => {
+    return getFullMemoryData(repoPath);
+  });
+
+  ipcMain.handle(IPC.getMemoryFile, (_, payload: { scope: string; name: string; repoPath?: string }) => {
+    if (payload.scope === "global") return readHomeMemoryFile(payload.name);
+    if (payload.repoPath) return readRepoMemoryFile(payload.repoPath, payload.name);
+    return "";
+  });
+
+  ipcMain.handle(IPC.updateMemorySummary, (_, payload: { scope: string; content: string; repoPath?: string }) => {
+    if (payload.scope === "global") { writeHomeSummary(payload.content); return true; }
+    if (payload.repoPath) { writeRepoSummary(payload.repoPath, payload.content); return true; }
+    return false;
   });
 
   // --- Utility ---

@@ -25,6 +25,11 @@ export const IPC = {
   getSettings: "grist:getSettings",
   setSettings: "grist:setSettings",
 
+  // Memory
+  getMemory: "grist:getMemory",
+  getMemoryFile: "grist:getMemoryFile",
+  updateMemorySummary: "grist:updateMemorySummary",
+
   // Utility
   openPath: "grist:openPath",
   logsDir: "grist:logsDir",

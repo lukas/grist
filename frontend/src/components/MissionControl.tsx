@@ -8,6 +8,8 @@ type Props = {
   onSelectRepo: (repo: string) => void;
   onPickRepo: () => void;
   onOpenSettings: () => void;
+  memoryOpen: boolean;
+  onToggleMemory: () => void;
 };
 
 const PROVIDER_DOT: Record<string, string> = {
@@ -25,6 +27,8 @@ export function MissionControl({
   onSelectRepo,
   onPickRepo,
   onOpenSettings,
+  memoryOpen,
+  onToggleMemory,
 }: Props) {
   const [rootTask, setRootTask] = useState<RootTaskRow | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -129,6 +133,19 @@ export function MissionControl({
       >
         <span className={`inline-block h-1.5 w-1.5 rounded-full ${PROVIDER_DOT[provider] ?? "bg-gray-500"}`} />
         {provider || "provider"}
+      </button>
+
+      <button
+        type="button"
+        className={`rounded px-1.5 py-0.5 text-xs ${
+          memoryOpen
+            ? "bg-accent/20 text-accent"
+            : "text-muted hover:bg-white/5 hover:text-white"
+        }`}
+        onClick={onToggleMemory}
+        title="Toggle memory drawer"
+      >
+        Memory
       </button>
 
       {rootTask && (

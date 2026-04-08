@@ -36,6 +36,12 @@ const api = {
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   setSettings: (p: Record<string, unknown>) => ipcRenderer.invoke(IPC.setSettings, p),
 
+  getMemory: (repoPath: string) => ipcRenderer.invoke(IPC.getMemory, repoPath),
+  getMemoryFile: (payload: { scope: string; name: string; repoPath?: string }) =>
+    ipcRenderer.invoke(IPC.getMemoryFile, payload) as Promise<string>,
+  updateMemorySummary: (payload: { scope: string; content: string; repoPath?: string }) =>
+    ipcRenderer.invoke(IPC.updateMemorySummary, payload) as Promise<boolean>,
+
   openPath: (p: string) => ipcRenderer.invoke(IPC.openPath, p) as Promise<string>,
   logsDir: (rootTaskId: number) => ipcRenderer.invoke(IPC.logsDir, rootTaskId) as Promise<string>,
 

@@ -45,6 +45,25 @@ declare global {
     task_id: number | null;
   }
 
+  interface MemoryFileInfo {
+    name: string;
+    content: string;
+    mtime: number;
+  }
+
+  interface MemoryData {
+    repoSummary: string;
+    homeSummary: string;
+    repoFiles: MemoryFileInfo[];
+    homeFiles: MemoryFileInfo[];
+  }
+
+  interface MemorySelection {
+    scope: "project" | "global";
+    type: "summary" | "file";
+    name: string;
+  }
+
   interface Window {
     grist: {
       ping(): Promise<string>;
@@ -68,6 +87,10 @@ declare global {
 
       getSettings(): Promise<Record<string, unknown>>;
       setSettings(p: Record<string, unknown>): Promise<boolean>;
+
+      getMemory(repoPath: string): Promise<MemoryData>;
+      getMemoryFile(p: { scope: string; name: string; repoPath?: string }): Promise<string>;
+      updateMemorySummary(p: { scope: string; content: string; repoPath?: string }): Promise<boolean>;
 
       openPath(p: string): Promise<string>;
       logsDir(rootTaskId: number): Promise<string>;
