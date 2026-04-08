@@ -22,7 +22,7 @@ Everything is a **task**. When you type a goal and hit Run:
 3. **Work tasks** (analysis/implementation) execute in parallel (max 4)
 4. Work tasks can spawn their own **subtasks**
 
-All tasks share the same UI: a tree in the sidebar, chat-style event detail on the right.
+All tasks share the same UI: a tree in the sidebar, chat-style event detail with operator messaging on the right.
 
 ## Layout
 
@@ -45,6 +45,7 @@ The frontend uses a unified task API (no "job" concept exposed):
 | `getChildTasks` | Get subtasks for a root task |
 | `getEventsForTask` | Get events for any task |
 | `rootTaskControl` | Pause/resume/stop a root task |
+| `sendTaskMessage` | Send a message to a running task's agent |
 
 ## CLI
 

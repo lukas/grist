@@ -1,6 +1,6 @@
 import { getTask, updateTask, touchTaskActivity } from "../db/taskRepo.js";
 import { getJob, addJobTokenUsage } from "../db/jobRepo.js";
-import { insertEvent } from "../db/eventRepo.js";
+import { insertEvent, listEventsByTaskId } from "../db/eventRepo.js";
 import { insertArtifact } from "../db/artifactRepo.js";
 import { createProvider } from "../providers/providerFactory.js";
 import { loadAppSettings } from "../settings/appSettings.js";
@@ -11,6 +11,23 @@ import { ensureScratchpad } from "../workspace/scratchpadManager.js";
 import { runReducerPass } from "./reducer.js";
 import { runVerifierPass } from "./verifier.js";
 import { appendTaskLog } from "../logging/taskLogger.js";
+
+const RECENT_WINDOW = 10;
+const MASKED_MAX_CHARS = 200;
+
+function compactHistory(history: { role: string; content: string }[]): { role: string; content: string }[] {
+  if (history.length <= RECENT_WINDOW) return history;
+  const cutoff = history.length - RECENT_WINDOW;
+  return history.map((h, i) => {
+    if (i >= cutoff) return h;
+    // Keep assistant reasoning and user messages intact; mask verbose tool results
+    if (h.role === "tool_result") {
+      if (h.content.length <= MASKED_MAX_CHARS) return h;
+      return { role: h.role, content: h.content.slice(0, MASKED_MAX_CHARS) + " … [truncated]" };
+    }
+    return h;
+  });
+}
 
 function buildToolContext(
   task: NonNullable<ReturnType<typeof getTask>>,
@@ -91,6 +108,7 @@ export async function runTaskWorker(
   ensureScratchpad(row.scratchpad_path);
   const signatures: string[] = [];
   const history: { role: string; content: string }[] = [];
+  const seenUserMsgIds = new Set<number>();
   let consecutiveEmpty = 0;
   let consecutiveErrors = 0;
 
@@ -124,14 +142,24 @@ export async function runTaskWorker(
     if (task.status !== "running") break;
 
     if (task.steps_used >= task.max_steps) {
-      updateTask(taskId, { status: "paused", blocker: "max_steps exceeded", next_action: "operator" });
-      emit("warn", "budget", "max_steps exceeded", { steps: task.steps_used });
+      updateTask(taskId, { status: "paused", blocker: `max_steps exceeded (${task.steps_used}/${task.max_steps})`, next_action: "operator" });
+      emit("warn", "budget", `max_steps exceeded — ${task.steps_used}/${task.max_steps} steps used, model: ${row.assigned_model_provider}`, { steps: task.steps_used, max_steps: task.max_steps, model: row.assigned_model_provider });
       break;
     }
     if (task.tokens_used >= task.max_tokens) {
-      updateTask(taskId, { status: "paused", blocker: "max_tokens exceeded" });
-      emit("warn", "budget", "max_tokens exceeded", { tokens: task.tokens_used });
+      updateTask(taskId, { status: "paused", blocker: `max_tokens exceeded (${task.tokens_used.toLocaleString()}/${task.max_tokens.toLocaleString()} tokens, model: ${row.assigned_model_provider})` });
+      emit("warn", "budget", `max_tokens exceeded — ${task.tokens_used.toLocaleString()}/${task.max_tokens.toLocaleString()} tokens, model: ${row.assigned_model_provider}, history: ${history.length} entries`, { tokens: task.tokens_used, max_tokens: task.max_tokens, model: row.assigned_model_provider, history_len: history.length });
       break;
+    }
+
+    // Inject any user messages added since last step
+    const allEvts = listEventsByTaskId(taskId, 500) as { id: number; type: string; message: string }[];
+    const userMsgs = allEvts
+      .filter((e) => e.type === "user_message" && !seenUserMsgIds.has(e.id))
+      .slice(-5);
+    for (const um of userMsgs) {
+      seenUserMsgIds.add(um.id);
+      history.push({ role: "user", content: `[Operator message]: ${um.message}` });
     }
 
     const stepNum = task.steps_used + 1;
@@ -160,8 +188,9 @@ IMPORTANT:
 - Do NOT parallelize tools that depend on each other (e.g. read then write based on read).
 - When done, use {"decision":"finish", "reasoning_summary":"what was accomplished"}.`;
 
-    const historyBlock = history.length
-      ? "\n\nPrevious steps:\n" + history.map((h) => `[${h.role}]: ${h.content}`).join("\n")
+    const compacted = compactHistory(history);
+    const historyBlock = compacted.length
+      ? "\n\nPrevious steps:\n" + compacted.map((h) => `[${h.role}]: ${h.content}`).join("\n")
       : "";
 
     const user = `Job goal: ${job.user_goal}

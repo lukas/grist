@@ -10,7 +10,8 @@ import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { IPC } from "../shared/ipc.js";
 import { getSetting, setSetting, loadAppSettings, saveAppSettingsPatch } from "../backend/settings/appSettings.js";
 import { createRootTask, listRootTasks, getRootTask, rootTaskToJobId, getChildTasks } from "../backend/db/rootTaskFacade.js";
-import { listEventsByTaskId, listEvents } from "../backend/db/eventRepo.js";
+import { insertEvent, listEventsByTaskId, listEvents } from "../backend/db/eventRepo.js";
+import { getTask } from "../backend/db/taskRepo.js";
 import type { TaskControlAction, RootTaskControlAction } from "../shared/ipc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -96,8 +97,9 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.isGitRepo, (_, p: string) => {
     try {
-      if (!existsSync(p)) return false;
-      execFileSync("git", ["rev-parse", "--git-dir"], { cwd: p, stdio: "pipe" });
+      const resolved = p.startsWith("~/") ? join(app.getPath("home"), p.slice(2)) : p;
+      if (!existsSync(resolved)) return false;
+      execFileSync("git", ["rev-parse", "--git-dir"], { cwd: resolved, stdio: "pipe" });
       return true;
     } catch {
       return false;
@@ -113,6 +115,9 @@ function registerIpc(): void {
       });
       if (r.canceled || !r.filePaths[0]) return null;
       target = r.filePaths[0];
+    }
+    if (target.startsWith("~/")) {
+      target = join(app.getPath("home"), target.slice(2));
     }
     try {
       mkdirSync(target, { recursive: true });
@@ -177,6 +182,19 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.taskControl, (_, a: TaskControlAction) => {
     orchestrator.taskControl(a);
+    return true;
+  });
+
+  ipcMain.handle(IPC.sendTaskMessage, (_, payload: { taskId: number; message: string }) => {
+    const task = getTask(payload.taskId);
+    if (!task) return false;
+    insertEvent({
+      job_id: task.job_id,
+      task_id: payload.taskId,
+      level: "info",
+      type: "user_message",
+      message: payload.message,
+    });
     return true;
   });
 

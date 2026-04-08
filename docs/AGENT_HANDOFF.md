@@ -69,6 +69,7 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 | `stopTask` | Stop a root task |
 | `rootTaskControl` | Pause/resume/stop a root task |
 | `taskControl` | Pause/stop/redirect/fork individual tasks |
+| `sendTaskMessage` | Inject operator message into a running task's event stream |
 
 ### Frontend components
 
@@ -77,7 +78,7 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 | `App.tsx` | State: `rootTaskId`, `selectedTaskId`. Uses `createTask`/`startTask` to run. |
 | `MissionControl` | Header bar. Repo picker, provider dot, pause/resume/stop via `rootTaskControl`. |
 | `TaskList` | Left sidebar. Root tasks as expandable nodes, child tasks as tree. Filters out `root`/`planner` kinds. |
-| `TaskDetail` | Main panel. Chat-style event view. Loads events via `getEventsForTask(taskId)`. |
+| `TaskDetail` | Main panel. Chat-style event view with operator message input. Loads events via `getEventsForTask(taskId)`. |
 
 ## Contracts / invariants
 
@@ -114,3 +115,5 @@ Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `s
 | 2026-04-08 | Unified task model: root task facade, planner as real task. |
 | 2026-04-08 | Bug fixes: retry on model errors, stall dedup, job status reflects failed tasks, maxTokens 8K→16K. |
 | 2026-04-08 | Frontend fully wired to unified task API. Removed all `jobId` references from renderer. Deleted orphaned components (EventStream, PatchComparison, GlobalFindings, MemoryDrawer, MemoryViewer, SkillsModal). |
+| 2026-04-08 | Operator messaging: `sendTaskMessage` IPC inserts `user_message` events; `workerRunner` injects them into LLM history; `TaskDetail` shows chat input + styled message bubbles. |
+| 2026-04-08 | History compaction: observation masking keeps last 10 entries in full, truncates older tool results to 200 chars. Token budgets raised to 200K/100K. Budget-exceeded messages now show model name, token usage, and history size. Settings: DB (UI) values take priority over .env defaults. |

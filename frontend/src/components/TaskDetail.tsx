@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function safeJson(s: string): Record<string, any> | null {
@@ -29,7 +29,7 @@ export function TaskDetail({
       setTask((rows as ChildTask[]).find((r) => r.id === taskId) || null);
     });
     void window.grist.getEventsForTask(taskId).then((rows) =>
-      setEvents((rows as TaskEvent[]).reverse()),
+      setEvents(rows as TaskEvent[]),
     );
   }, [rootTaskId, taskId, tick]);
 
@@ -38,6 +38,31 @@ export function TaskDetail({
   }, [events.length]);
 
   const steps = useMemo(() => groupByStep(events), [events]);
+
+  const [msgInput, setMsgInput] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const sendMessage = useCallback(async () => {
+    const text = msgInput.trim();
+    if (!text || !taskId) return;
+    setSending(true);
+    try {
+      await window.grist.sendTaskMessage(taskId, text);
+      setMsgInput("");
+    } finally {
+      setSending(false);
+    }
+  }, [msgInput, taskId]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        void sendMessage();
+      }
+    },
+    [sendMessage],
+  );
 
   if (taskId == null) {
     return <p className="p-4 text-sm text-muted">Select a task to see its activity.</p>;
@@ -49,6 +74,21 @@ export function TaskDetail({
       <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-4 py-1.5 text-xs">
         <span className="font-medium text-white">{task.role}</span>
         <StatusPill status={task.status} />
+        {task.status === "running" && task.current_action && (
+          <ActivityBadge action={task.current_action} />
+        )}
+        {(task.status === "paused" || task.status === "stopped") && rootTaskId && (
+          <button
+            type="button"
+            className="rounded bg-emerald-700 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-600"
+            onClick={() => {
+              void window.grist.taskControl({ type: "enqueue", taskId: task.id });
+              void window.grist.rootTaskControl({ type: "resume_all", rootTaskId });
+            }}
+          >
+            ▶ Resume
+          </button>
+        )}
         <span className="text-muted">
           {task.steps_used}/{task.max_steps} steps
         </span>
@@ -70,6 +110,27 @@ export function TaskDetail({
           <StepBlock key={step.key} step={step} />
         ))}
         <div ref={bottomRef} />
+      </div>
+
+      <div className="shrink-0 border-t border-border/50 px-3 py-2">
+        <div className="flex items-end gap-2">
+          <textarea
+            className="min-h-[36px] max-h-24 flex-1 resize-none rounded border border-border/60 bg-white/5 px-2.5 py-1.5 text-sm text-white placeholder:text-muted focus:border-violet-500/60 focus:outline-none"
+            placeholder="Send a message to this agent… (⌘+Enter)"
+            value={msgInput}
+            onChange={(e) => setMsgInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+          />
+          <button
+            type="button"
+            disabled={!msgInput.trim() || sending}
+            className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-40"
+            onClick={() => void sendMessage()}
+          >
+            {sending ? "…" : "Send"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -171,7 +232,10 @@ function StepBlock({ step }: { step: StepGroup }) {
   return (
     <div className="mb-3">
       {step.reasoning && (
-        <p className="text-[13px] leading-relaxed text-gray-200">{step.reasoning}</p>
+        <div className="flex items-start gap-2">
+          <p className="flex-1 text-[13px] leading-relaxed text-gray-200">{step.reasoning}</p>
+          <span className="shrink-0 pt-0.5 text-[10px] text-gray-600">{step.time}</span>
+        </div>
       )}
 
       {step.toolName && (
@@ -189,9 +253,12 @@ function StepBlock({ step }: { step: StepGroup }) {
               <span className="truncate text-muted">{toolSummary}</span>
             )}
             {(step.tokensIn > 0) && (
-              <span className="ml-auto shrink-0 text-[10px] text-muted">
+              <span className="ml-auto shrink-0 text-[10px] text-gray-600">
                 {step.tokensIn}→{step.tokensOut}
               </span>
+            )}
+            {!step.reasoning && (
+              <span className="shrink-0 text-[10px] text-gray-600">{step.time}</span>
             )}
             <span className="shrink-0 text-[10px] text-muted opacity-0 group-hover:opacity-100">
               {expanded ? "▲" : "▼"}
@@ -250,6 +317,17 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
   const [expanded, setExpanded] = useState(false);
   const data = ev.data_json ? safeJson(ev.data_json) : null;
   const time = ev.created_at.slice(11, 19);
+
+  if (ev.type === "user_message") {
+    return (
+      <div className="my-1.5 flex items-start gap-2 rounded border border-violet-500/30 bg-violet-900/15 px-3 py-2">
+        <span className="text-xs font-medium text-violet-300">You:</span>
+        <span className="flex-1 text-xs text-violet-100">{ev.message}</span>
+        <span className="shrink-0 text-[10px] text-gray-600">{time}</span>
+      </div>
+    );
+  }
+
   const color =
     ev.level === "error" ? "text-red-400" :
     ev.level === "warn" ? "text-amber-300" :
@@ -257,7 +335,6 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
 
   return (
     <div className={`flex items-start gap-1 py-0.5 text-xs ${color}`}>
-      <span className="shrink-0 text-[10px] text-muted">{time}</span>
       <span className="font-medium">[{ev.type}]</span>
       <span className="flex-1">{ev.message}</span>
       {data && (
@@ -269,6 +346,7 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
           {expanded ? "−" : "+"}
         </button>
       )}
+      <span className="shrink-0 text-[10px] text-gray-600">{time}</span>
       {expanded && data && (
         <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px]">
           {JSON.stringify(data, null, 2)}
@@ -315,4 +393,28 @@ function StatusPill({ status }: { status: string }) {
   else if (status === "failed") cls = "bg-red-800/60 text-red-300";
   else if (status === "paused") cls = "bg-amber-800/60 text-amber-300";
   return <span className={`rounded-full px-1.5 py-px text-[10px] ${cls}`}>{status}</span>;
+}
+
+function ActivityBadge({ action }: { action: string }) {
+  let label: string;
+  let cls: string;
+  if (action === "thinking") {
+    label = "Waiting for LLM…";
+    cls = "border-violet-500/40 text-violet-300 bg-violet-900/20";
+  } else if (action.startsWith("step ")) {
+    label = "Running tool…";
+    cls = "border-cyan-500/40 text-cyan-300 bg-cyan-900/20";
+  } else if (action === "worker_start") {
+    label = "Starting…";
+    cls = "border-gray-500/40 text-gray-300 bg-gray-900/20";
+  } else {
+    label = action;
+    cls = "border-gray-500/40 text-gray-300 bg-gray-900/20";
+  }
+  return (
+    <span className={`inline-flex animate-pulse items-center gap-1 rounded-full border px-1.5 py-px text-[10px] ${cls}`}>
+      <span className="inline-block h-1 w-1 rounded-full bg-current" />
+      {label}
+    </span>
+  );
 }

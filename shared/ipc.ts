@@ -19,6 +19,7 @@ export const IPC = {
   stopTask: "grist:stopTask",
   rootTaskControl: "grist:rootTaskControl",
   taskControl: "grist:taskControl",
+  sendTaskMessage: "grist:sendTaskMessage",
 
   // Settings
   getSettings: "grist:getSettings",

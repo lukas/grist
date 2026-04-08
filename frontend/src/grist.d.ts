@@ -32,6 +32,7 @@ declare global {
     dependencies_json: string;
     parent_task_id: number | null;
     blocker: string;
+    current_action: string;
   }
 
   interface TaskEvent {
@@ -63,6 +64,7 @@ declare global {
       stopTask(rootTaskId: number): Promise<boolean>;
       rootTaskControl(a: RootTaskControlAction): Promise<boolean>;
       taskControl(a: TaskControlAction): Promise<boolean>;
+      sendTaskMessage(taskId: number, message: string): Promise<boolean>;
 
       getSettings(): Promise<Record<string, unknown>>;
       setSettings(p: Record<string, unknown>): Promise<boolean>;

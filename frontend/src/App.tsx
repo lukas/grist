@@ -2,20 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 import { MissionControl } from "./components/MissionControl";
 import { TaskList } from "./components/TaskList";
 import { TaskDetail } from "./components/TaskDetail";
+import { NewTaskForm } from "./components/NewTaskForm";
 import { SettingsModal } from "./components/SettingsModal";
 import { RepoDialog } from "./components/RepoDialog";
 import { AutoPauseBanner } from "./components/AutoPauseBanner";
 
 export default function App() {
   const [repo, setRepo] = useState("");
-  const [goal, setGoal] = useState("");
-  const [notes, setNotes] = useState("");
   const [rootTaskId, setRootTaskId] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [repoDialogOpen, setRepoDialogOpen] = useState(false);
-  const [pendingRun, setPendingRun] = useState(false);
   const [provider, setProvider] = useState("");
   const [pauseWarnings, setPauseWarnings] = useState<{ taskId: number; message: string }[]>([]);
 
@@ -37,7 +35,6 @@ export default function App() {
         const latest = tasks[0];
         setRootTaskId(latest.id);
         setRepo(latest.repo_path);
-        setGoal(latest.user_goal);
       }
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -81,24 +78,29 @@ export default function App() {
     setRepo(repoPath);
     setRootTaskId(null);
     setSelectedTaskId(null);
-    setGoal("");
-    setNotes("");
   };
 
   const onRepoSelected = (repoPath: string) => {
     setRepo(repoPath);
     setRepoDialogOpen(false);
-    if (pendingRun && goal.trim()) {
-      setPendingRun(false);
-      void startRun(repoPath);
-    }
   };
 
-  const startRun = async (repoPath: string) => {
-    const id = await window.grist.createTask({ repoPath, goal: goal.trim(), notes });
+  const startRun = async (goal: string) => {
+    if (!repo) return;
+    const id = await window.grist.createTask({ repoPath: repo, goal });
     setRootTaskId(id);
     await window.grist.startTask(id);
     refresh();
+    // Auto-select the first child task once the planner creates one
+    const selectFirst = async (retries: number) => {
+      const children = await window.grist.getChildTasks(id) as ChildTask[];
+      if (children.length > 0) {
+        setSelectedTaskId(children[0].id);
+      } else if (retries > 0) {
+        setTimeout(() => void selectFirst(retries - 1), 500);
+      }
+    };
+    void selectFirst(10);
   };
 
   const loadTask = (id: number) => {
@@ -108,24 +110,14 @@ export default function App() {
       if (!t) return;
       const rt = t as RootTaskRow;
       if (rt.repo_path) setRepo(rt.repo_path);
-      if (rt.user_goal) setGoal(rt.user_goal);
-      if (rt.operator_notes) setNotes(rt.operator_notes);
     });
     refresh();
   };
 
-  const createAndPlan = async () => {
-    if (!goal.trim()) return;
-    if (!repo) {
-      setPendingRun(true);
-      setRepoDialogOpen(true);
-      return;
-    }
-    await startRun(repo);
-  };
-
   const dismissWarning = (idx: number) =>
     setPauseWarnings((prev) => prev.filter((_, i) => i !== idx));
+
+  const showNewTaskForm = selectedTaskId == null;
 
   return (
     <div className="flex h-screen flex-col bg-panel text-gray-100">
@@ -136,16 +128,11 @@ export default function App() {
       />
       <MissionControl
         repo={repo}
-        goal={goal}
         rootTaskId={rootTaskId}
         tick={tick}
-        onGoalChange={setGoal}
-        onNotesChange={setNotes}
-        notes={notes}
+        provider={provider}
         onSelectRepo={switchRepo}
         onPickRepo={openRepoDialog}
-        onCreateRun={createAndPlan}
-        provider={provider}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <div className="flex min-h-0 flex-1">
@@ -160,14 +147,22 @@ export default function App() {
           />
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-panel">
-          <TaskDetail rootTaskId={rootTaskId} taskId={selectedTaskId} tick={tick} onRefresh={refresh} />
+          {showNewTaskForm ? (
+            <NewTaskForm
+              repo={repo}
+              onCreateRun={startRun}
+              onPickRepo={openRepoDialog}
+            />
+          ) : (
+            <TaskDetail rootTaskId={rootTaskId} taskId={selectedTaskId} tick={tick} onRefresh={refresh} />
+          )}
         </div>
       </div>
       {settingsOpen && <SettingsModal onClose={() => { setSettingsOpen(false); loadProvider(); }} />}
       {repoDialogOpen && (
         <RepoDialog
           onSelect={onRepoSelected}
-          onCancel={() => { setRepoDialogOpen(false); setPendingRun(false); }}
+          onCancel={() => setRepoDialogOpen(false)}
         />
       )}
     </div>

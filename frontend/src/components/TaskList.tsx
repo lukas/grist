@@ -262,8 +262,18 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function taskSublabel(t: ChildTask): string {
+  if (t.status === "running" && t.current_action) {
+    return actionLabel(t.current_action);
+  }
   const parts: string[] = [];
   if (t.steps_used > 0) parts.push(`${t.steps_used}/${t.max_steps}`);
   if (t.tokens_used > 0) parts.push(`${t.tokens_used} tok`);
   return parts.join(" · ") || t.kind;
+}
+
+function actionLabel(action: string): string {
+  if (action === "thinking") return "LLM…";
+  if (action.startsWith("step ")) return `step ${action.slice(5)}`;
+  if (action === "worker_start") return "starting…";
+  return action;
 }

@@ -30,6 +30,8 @@ const api = {
     ipcRenderer.invoke(IPC.rootTaskControl, a) as Promise<boolean>,
   taskControl: (a: TaskControlAction) =>
     ipcRenderer.invoke(IPC.taskControl, a) as Promise<boolean>,
+  sendTaskMessage: (taskId: number, message: string) =>
+    ipcRenderer.invoke(IPC.sendTaskMessage, { taskId, message }) as Promise<boolean>,
 
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   setSettings: (p: Record<string, unknown>) => ipcRenderer.invoke(IPC.setSettings, p),

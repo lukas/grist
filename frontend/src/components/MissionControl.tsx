@@ -1,17 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Props = {
   repo: string;
-  goal: string;
-  notes: string;
   rootTaskId: number | null;
   tick: number;
   provider: string;
-  onGoalChange: (s: string) => void;
-  onNotesChange: (s: string) => void;
   onSelectRepo: (repo: string) => void;
   onPickRepo: () => void;
-  onCreateRun: () => void;
   onOpenSettings: () => void;
 };
 
@@ -24,16 +19,11 @@ const PROVIDER_DOT: Record<string, string> = {
 
 export function MissionControl({
   repo,
-  goal,
-  notes,
   rootTaskId,
   tick,
   provider,
-  onGoalChange,
-  onNotesChange,
   onSelectRepo,
   onPickRepo,
-  onCreateRun,
   onOpenSettings,
 }: Props) {
   const [rootTask, setRootTask] = useState<RootTaskRow | null>(null);
@@ -68,15 +58,6 @@ export function MissionControl({
     onSelectRepo(r);
   };
 
-  const tryCreateRun = () => {
-    if (!goal.trim()) return;
-    void onCreateRun();
-  };
-
-  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") { e.preventDefault(); tryCreateRun(); }
-  };
-
   const shortRepo = repo
     ? repo.split("/").slice(-2).join("/")
     : "repo…";
@@ -85,7 +66,6 @@ export function MissionControl({
     <header className="flex items-center gap-2 border-b border-border/50 bg-[#0e1420] px-3 py-1.5 text-xs">
       <span className="text-sm font-semibold text-white">Grist</span>
 
-      {/* Repo picker with dropdown */}
       <div className="relative" ref={dropdownRef}>
         <button
           type="button"
@@ -140,29 +120,7 @@ export function MissionControl({
         )}
       </div>
 
-      <input
-        className="min-w-[180px] flex-1 rounded border border-border/40 bg-transparent px-2 py-1 text-gray-100 placeholder:text-gray-600 focus:border-accent focus:outline-none"
-        placeholder="Goal…"
-        value={goal}
-        onChange={(e) => onGoalChange(e.target.value)}
-        onKeyDown={onKey}
-      />
-      <input
-        className="w-36 rounded border border-border/40 bg-transparent px-2 py-1 text-gray-300 placeholder:text-gray-600 focus:border-accent focus:outline-none"
-        placeholder="Notes…"
-        value={notes}
-        onChange={(e) => onNotesChange(e.target.value)}
-        onKeyDown={onKey}
-      />
-
-      <button
-        type="button"
-        className="rounded bg-emerald-600 px-2.5 py-1 text-white disabled:opacity-30"
-        disabled={!goal.trim()}
-        onClick={tryCreateRun}
-      >
-        Run
-      </button>
+      <div className="flex-1" />
 
       <button
         type="button"
