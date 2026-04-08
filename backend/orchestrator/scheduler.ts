@@ -12,7 +12,11 @@ const NON_SCHEDULABLE_KINDS = new Set(["root", "planner"]);
 function depsSatisfied(task: TaskRow, byId: Map<number, TaskRow>): boolean {
   const deps = JSON.parse(task.dependencies_json || "[]") as number[];
   if (deps.length === 0) return true;
-  return deps.every((id) => byId.get(id)?.status === "done");
+  const terminal = new Set(["done", "completed", "failed", "stopped"]);
+  return deps.every((id) => {
+    const s = byId.get(id)?.status;
+    return s != null && terminal.has(s);
+  });
 }
 
 function schedulable(t: TaskRow): boolean {

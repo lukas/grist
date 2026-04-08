@@ -295,6 +295,8 @@ Use call_tools to run independent operations in parallel — e.g. reading multip
 IMPORTANT:
 - Do NOT read_file a file you just wrote — you already know its contents.
 - Do NOT parallelize tools that depend on each other (e.g. read then write based on read).
+- Call write_memory when you discover something notable (architecture decisions, gotchas, conventions). Don't wait until the end.
+- After writing code, test it with run_command_safe when possible.
 - When done, use {"decision":"finish", "reasoning_summary":"what was accomplished"}.`;
 
     const compacted = await compactHistory(history, provider, emit);
