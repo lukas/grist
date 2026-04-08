@@ -11,8 +11,10 @@ export function MemoryDrawer({ repo, tick, selected, onSelect }: Props) {
   const [data, setData] = useState<MemoryData | null>(null);
 
   useEffect(() => {
-    if (!repo) return;
-    void window.grist.getMemory(repo).then(setData);
+    if (!repo || !window.grist?.getMemory) return;
+    void window.grist.getMemory(repo).then(setData).catch(() => {
+      setData({ repoSummary: "", homeSummary: "", repoFiles: [], homeFiles: [] });
+    });
   }, [repo, tick]);
 
   if (!data) {

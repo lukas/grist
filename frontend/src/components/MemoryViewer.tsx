@@ -14,12 +14,13 @@ export function MemoryViewer({ selection, repo, onClose }: Props) {
 
   useEffect(() => {
     setEditing(false);
+    if (!window.grist?.getMemory) { setContent("(memory API unavailable — restart app)"); return; }
     if (selection.type === "summary") {
       void window.grist.getMemory(repo).then((data) => {
         const text = selection.scope === "project" ? data.repoSummary : data.homeSummary;
         setContent(text);
         setDraft(text);
-      });
+      }).catch(() => { setContent("(failed to load)"); });
     } else {
       void window.grist
         .getMemoryFile({
@@ -30,7 +31,7 @@ export function MemoryViewer({ selection, repo, onClose }: Props) {
         .then((text) => {
           setContent(text);
           setDraft(text);
-        });
+        }).catch(() => { setContent("(failed to load)"); });
     }
   }, [selection, repo]);
 

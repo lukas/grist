@@ -179,7 +179,7 @@ export default function App() {
             <TaskDetail rootTaskId={rootTaskId} taskId={selectedTaskId} tick={tick} onRefresh={refresh} />
           )}
         </div>
-        {memoryOpen && (
+        {memoryOpen && repo && (
           <div className="w-56 shrink-0 overflow-hidden border-l border-border/50 bg-[#0e1420]">
             <MemoryDrawer
               repo={repo}

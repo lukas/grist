@@ -217,7 +217,12 @@ function registerIpc(): void {
   // --- Memory ---
 
   ipcMain.handle(IPC.getMemory, (_, repoPath: string) => {
-    return getFullMemoryData(repoPath);
+    try {
+      return getFullMemoryData(repoPath);
+    } catch (e) {
+      console.error("[getMemory] error:", e);
+      return { repoSummary: "", homeSummary: "", repoFiles: [], homeFiles: [] };
+    }
   });
 
   ipcMain.handle(IPC.getMemoryFile, (_, payload: { scope: string; name: string; repoPath?: string }) => {
