@@ -12,21 +12,122 @@ import { runReducerPass } from "./reducer.js";
 import { runVerifierPass } from "./verifier.js";
 import { appendTaskLog } from "../logging/taskLogger.js";
 
+/* ─── Three-tier context compaction (inspired by Claude Code + OpenHands) ─── */
+
+type HistoryEntry = { role: string; content: string };
+
 const RECENT_WINDOW = 10;
 const MASKED_MAX_CHARS = 200;
+const CHARS_PER_TOKEN = 3.5;
+const SUMMARIZE_THRESHOLD_ENTRIES = 30;
+const MAX_CONTEXT_CHARS = 120_000;
 
-function compactHistory(history: { role: string; content: string }[]): { role: string; content: string }[] {
+const SUMMARIZE_PROMPT = `You are a context compaction agent. Summarize the following conversation history between a coding agent and its tools into a concise summary that preserves:
+1. Key decisions and reasoning
+2. Files created, modified, or examined (with paths)
+3. Important findings and errors encountered
+4. Current state and progress toward the goal
+5. Any user/operator instructions
+
+Be specific about file paths and code changes. Omit raw file contents and verbose tool output.
+Output ONLY the summary text, no JSON wrapping.`;
+
+function estimateTokens(entries: HistoryEntry[]): number {
+  let chars = 0;
+  for (const e of entries) chars += e.content.length + e.role.length + 4;
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
+/**
+ * Tier 1: Observation masking — truncate verbose tool results outside the
+ * recent window. Keeps assistant reasoning and user messages intact.
+ * This is always applied and costs zero extra tokens.
+ */
+function maskObservations(history: HistoryEntry[]): HistoryEntry[] {
   if (history.length <= RECENT_WINDOW) return history;
   const cutoff = history.length - RECENT_WINDOW;
   return history.map((h, i) => {
     if (i >= cutoff) return h;
-    // Keep assistant reasoning and user messages intact; mask verbose tool results
     if (h.role === "tool_result") {
       if (h.content.length <= MASKED_MAX_CHARS) return h;
-      return { role: h.role, content: h.content.slice(0, MASKED_MAX_CHARS) + " … [truncated]" };
+      const toolName = h.content.match(/^(\w+)/)?.[1] || "tool";
+      const preview = h.content.slice(0, MASKED_MAX_CHARS).replace(/\n/g, " ");
+      return { role: h.role, content: `[${toolName} output truncated] ${preview}…` };
     }
     return h;
   });
+}
+
+/**
+ * Tier 2: LLM-based summarization — when the history is large, summarize
+ * everything before the recent window into a single summary entry.
+ * The summary replaces older entries, drastically reducing token count.
+ * Uses the same provider as the task's model.
+ */
+async function summarizeOldHistory(
+  oldEntries: HistoryEntry[],
+  provider: import("../types/models.js").ModelProvider,
+): Promise<string> {
+  const text = oldEntries
+    .map((h) => `[${h.role}]: ${h.content.slice(0, 1000)}`)
+    .join("\n");
+  const resp = await provider.generateText({
+    systemPrompt: SUMMARIZE_PROMPT,
+    userPrompt: text.slice(0, 50_000),
+    maxTokens: 2048,
+    temperature: 0.1,
+  });
+  return resp.text || "(compaction failed)";
+}
+
+/**
+ * Full compaction pipeline:
+ *   1. Always apply observation masking (free, no LLM call)
+ *   2. If history is large enough AND estimated tokens exceed budget,
+ *      summarize old entries via LLM
+ *   3. Return the compacted history
+ */
+async function compactHistory(
+  history: HistoryEntry[],
+  provider: import("../types/models.js").ModelProvider,
+  emit: (level: "info" | "warn" | "error", type: string, message: string, data?: unknown) => void,
+): Promise<HistoryEntry[]> {
+  // Tier 1: observation masking (always)
+  let result = maskObservations(history);
+
+  const estTokens = estimateTokens(result);
+  const estChars = result.reduce((s, h) => s + h.content.length, 0);
+
+  // Tier 2+3: LLM summarization when both entry count AND token budget warrant it
+  if (result.length > SUMMARIZE_THRESHOLD_ENTRIES && estChars > MAX_CONTEXT_CHARS) {
+    const keepRecent = result.slice(-RECENT_WINDOW);
+    const oldEntries = result.slice(0, result.length - RECENT_WINDOW);
+
+    try {
+      emit("info", "compaction", `Summarizing ${oldEntries.length} old entries (est. ${estTokens} tokens)`, {
+        old_entries: oldEntries.length,
+        recent_entries: keepRecent.length,
+        est_tokens: estTokens,
+      });
+
+      const summary = await summarizeOldHistory(oldEntries, provider);
+
+      result = [
+        { role: "system", content: `[Context summary of ${oldEntries.length} previous steps]\n${summary}` },
+        ...keepRecent,
+      ];
+
+      emit("info", "compaction", `Compacted ${oldEntries.length} entries → summary (${summary.length} chars)`, {
+        summary_chars: summary.length,
+        new_total: result.length,
+        saved_entries: oldEntries.length - 1,
+      });
+    } catch (e) {
+      emit("warn", "compaction", `LLM summarization failed, falling back to masking: ${String(e)}`);
+    }
+  }
+
+  return result;
 }
 
 function buildToolContext(
@@ -188,7 +289,12 @@ IMPORTANT:
 - Do NOT parallelize tools that depend on each other (e.g. read then write based on read).
 - When done, use {"decision":"finish", "reasoning_summary":"what was accomplished"}.`;
 
-    const compacted = compactHistory(history);
+    const compacted = await compactHistory(history, provider, emit);
+    // Replace history in-place when summarization reduced it
+    if (compacted.length < history.length) {
+      history.length = 0;
+      history.push(...compacted);
+    }
     const historyBlock = compacted.length
       ? "\n\nPrevious steps:\n" + compacted.map((h) => `[${h.role}]: ${h.content}`).join("\n")
       : "";

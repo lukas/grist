@@ -87,10 +87,15 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 - **Scheduler skips root/planner** — `NON_SCHEDULABLE_KINDS = {root, planner}`.
 - **Auto-pause** — 3× identical tool call, 5 consecutive errors, 3 empty tool names.
 - **Stall detection** — debounced (one event per episode), escalation: warn@30s, pause@5min, fail@15min. Tasks in `current_action: "thinking"` are exempt.
+- **Three-tier context compaction** (Claude Code / OpenHands inspired):
+  - **Tier 1 — Observation masking** (always, free): truncate old tool results outside recent window (10 entries) to 200 chars with `[tool output truncated]` prefix. Keeps assistant reasoning + user messages intact.
+  - **Tier 2 — LLM summarization** (conditional): when history exceeds 30 entries AND 120K chars, summarize old entries via same provider into a single context summary. Recent 10 entries kept in full.
+  - **Tier 3 — Token-budget-aware**: triggers based on estimated token count. Compaction events emitted so UI can show when compaction occurs.
+  - History is replaced in-place after summarization so subsequent steps use the compact version.
 
 ## Provider env / settings
 
-SQLite `settings` table **or** repo-root **`.env`** (gitignored). `loadAppSettings()` prefers `.env` values when set. Prefix: `GRIST_*`. Also accepts `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
+SQLite `settings` table **or** repo-root **`.env`** (gitignored). `loadAppSettings()` prefers DB (UI) values; `.env` is fallback only. Prefix: `GRIST_*`. Also accepts `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
 
 ## CLI
 
@@ -116,4 +121,4 @@ Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `s
 | 2026-04-08 | Bug fixes: retry on model errors, stall dedup, job status reflects failed tasks, maxTokens 8K→16K. |
 | 2026-04-08 | Frontend fully wired to unified task API. Removed all `jobId` references from renderer. Deleted orphaned components (EventStream, PatchComparison, GlobalFindings, MemoryDrawer, MemoryViewer, SkillsModal). |
 | 2026-04-08 | Operator messaging: `sendTaskMessage` IPC inserts `user_message` events; `workerRunner` injects them into LLM history; `TaskDetail` shows chat input + styled message bubbles. |
-| 2026-04-08 | History compaction: observation masking keeps last 10 entries in full, truncates older tool results to 200 chars. Token budgets raised to 200K/100K. Budget-exceeded messages now show model name, token usage, and history size. Settings: DB (UI) values take priority over .env defaults. |
+| 2026-04-08 | Three-tier context compaction: Tier 1 observation masking (always), Tier 2 LLM summarization (>30 entries + >120K chars), Tier 3 token-budget-aware triggers. Token budgets 200K/100K. Budget messages show model/usage detail. Settings: DB overrides .env. |
