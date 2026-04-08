@@ -50,7 +50,9 @@ Everything is a **task**. The old "jobs" table is kept internally but hidden beh
 | **Root task facade** | `backend/db/rootTaskFacade.ts` |
 | Orchestrator | `backend/orchestrator/appOrchestrator.ts`, `planner.ts`, `scheduler.ts`, `workerRunner.ts`, `reducer.ts`, `verifier.ts` |
 | Providers | `backend/providers/*` + `providerFactory.ts` |
-| Tools | `backend/tools/executeTool.ts` |
+| Tools | `backend/tools/executeTool.ts`, `memoryTools.ts`, `controlTools.ts` |
+| Memory | `backend/memory/memoryManager.ts` — `~/.grist/` (global) + `<repo>/.grist/` (project) |
+| Reflection | `backend/orchestrator/reflection.ts` — async post-task learning distillation |
 | React UI | `frontend/src/App.tsx`, `frontend/src/components/*` |
 
 ### Frontend → IPC API
@@ -122,3 +124,4 @@ Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `s
 | 2026-04-08 | Frontend fully wired to unified task API. Removed all `jobId` references from renderer. Deleted orphaned components (EventStream, PatchComparison, GlobalFindings, MemoryDrawer, MemoryViewer, SkillsModal). |
 | 2026-04-08 | Operator messaging: `sendTaskMessage` IPC inserts `user_message` events; `workerRunner` injects them into LLM history; `TaskDetail` shows chat input + styled message bubbles. |
 | 2026-04-08 | Three-tier context compaction: Tier 1 observation masking (always), Tier 2 LLM summarization (>30 entries + >120K chars), Tier 3 token-budget-aware triggers. Token budgets 200K/100K. Budget messages show model/usage detail. Settings: DB overrides .env. |
+| 2026-04-08 | Robustness: Planner prefers parallel tasks for greenfield (architect + fan-out with scope.files). max_steps→done when files written. depsSatisfied accepts done/completed/failed/stopped. Memory tools wired into executeTool. Git diff includes untracked files. Allowlist expanded + supports wrapper commands. Memory prompting during work. |

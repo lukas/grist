@@ -56,6 +56,15 @@ node dist-electron/grist-cli.js status <taskId>  # task + subtask statuses
 node dist-electron/grist-cli.js watch <taskId>   # live tail events
 ```
 
+## Recent improvements
+
+- **Parallel greenfield planning**: Empty repos get an architect task + parallel module tasks (not 1 monolithic task)
+- **Retry on model errors**: Workers retry LLM/parse errors up to 3× with backoff
+- **Git diff captures new files**: Uses `git add -A` + `--cached` diff to include untracked files
+- **Expanded allowlist**: Common dev commands (npm, node, python, git, curl, etc.) + wrapper support (timeout, pipes)
+- **Memory system**: `write_memory`/`read_memory` tools + async post-task reflection
+- **Compaction preserves file list**: "Files written" entry survives context compaction
+
 ## Spec
 
 See `docs/AGENT_HANDOFF.md` for architecture details and contracts.

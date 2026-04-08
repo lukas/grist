@@ -206,6 +206,9 @@ export async function runTaskWorker(
   const provider = createProvider(row.assigned_model_provider, settings);
   const repoPath = job.repo_path;
 
+  ensureHomeMemory();
+  ensureRepoMemory(repoPath);
+
   const log = (entry: Omit<Parameters<typeof appendTaskLog>[1], "jobId" | "taskId">) =>
     appendTaskLog(repoPath, { ...entry, jobId: row.job_id, taskId });
 
@@ -527,11 +530,14 @@ Open questions: ${task.open_questions_json}${historyBlock}`;
       // Async reflection to persist memory
       runReflection({
         taskId: cur.id,
-        taskRole: cur.role,
-        taskGoal: cur.goal,
+        jobId: cur.job_id,
         repoPath,
+        taskGoal: cur.goal,
+        taskRole: cur.role,
         history: history.slice(-20),
+        reasoning: decision.reasoning_summary || "done",
         provider,
+        emit,
       }).catch(() => {});
 
       break;
