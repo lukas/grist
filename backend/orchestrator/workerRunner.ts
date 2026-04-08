@@ -11,6 +11,9 @@ import { ensureScratchpad } from "../workspace/scratchpadManager.js";
 import { runReducerPass } from "./reducer.js";
 import { runVerifierPass } from "./verifier.js";
 import { appendTaskLog } from "../logging/taskLogger.js";
+import { execSync } from "node:child_process";
+import { ensureHomeMemory, ensureRepoMemory, collectMemoryContext } from "../memory/memoryManager.js";
+import { runReflection } from "./reflection.js";
 
 /* ─── Three-tier context compaction (inspired by Claude Code + OpenHands) ─── */
 
@@ -509,6 +512,28 @@ Open questions: ${task.open_questions_json}${historyBlock}`;
       }
       updateTask(taskId, { status: "done", current_action: "finished", next_action: "" });
       emit("info", "task_done", decision.reasoning_summary || "done");
+
+      // Capture git diff including untracked files
+      try {
+        const diffCwd = cur.worktree_path || repoPath;
+        execSync("git add -A", { cwd: diffCwd, timeout: 5000 });
+        const gitDiff = execSync("git diff --cached --stat && echo '---' && git diff --cached", { cwd: diffCwd, timeout: 10000, maxBuffer: 256 * 1024 }).toString().slice(0, 8000);
+        execSync("git reset HEAD -- . 2>/dev/null || true", { cwd: diffCwd, timeout: 5000 });
+        if (gitDiff.trim()) {
+          emit("info", "task_diff", gitDiff, { diffCwd });
+        }
+      } catch { /* git diff is best-effort */ }
+
+      // Async reflection to persist memory
+      runReflection({
+        taskId: cur.id,
+        taskRole: cur.role,
+        taskGoal: cur.goal,
+        repoPath,
+        history: history.slice(-20),
+        provider,
+      }).catch(() => {});
+
       break;
     }
 
