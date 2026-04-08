@@ -56,7 +56,7 @@ function createWindow(): void {
     console.error("preload-error", path, err);
   });
 
-  if (isDev) {
+  if (isDev && process.env.GRIST_DEV_SERVER === "1") {
     mainWindow.loadURL("http://localhost:5173");
     mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {

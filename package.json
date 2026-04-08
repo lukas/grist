@@ -7,7 +7,7 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
-    "dev": "concurrently -k \"vite --config frontend/vite.config.ts\" \"wait-on tcp:5173 && npm run build:electron && npm run rebuild:electron && electron .\"",
+    "dev": "concurrently -k \"vite --config frontend/vite.config.ts\" \"wait-on tcp:5173 && npm run build:electron && npm run rebuild:electron && GRIST_DEV_SERVER=1 electron .\"",
     "build:electron": "node scripts/build-electron.mjs",
     "build": "npm run build:electron && npx vite build --config frontend/vite.config.ts",
     "start": "npm run rebuild:electron && electron .",

@@ -328,6 +328,30 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
     );
   }
 
+  if (ev.type === "task_done" || ev.type === "task_failed") {
+    const ok = ev.type === "task_done";
+    return (
+      <div className="my-1.5">
+        <button
+          type="button"
+          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs ${
+            ok ? "bg-blue-900/20 text-blue-300" : "bg-red-900/20 text-red-300"
+          }`}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span>{ok ? "Task completed" : "Task failed"}</span>
+          <span className="ml-auto shrink-0 text-[10px] text-gray-600">{time}</span>
+          <span className="shrink-0 text-[10px] text-muted">{expanded ? "▲" : "▼"}</span>
+        </button>
+        {expanded && ev.message && (
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/20 px-3 py-2 text-[11px] text-gray-400">
+            {ev.message}
+          </pre>
+        )}
+      </div>
+    );
+  }
+
   const color =
     ev.level === "error" ? "text-red-400" :
     ev.level === "warn" ? "text-amber-300" :
