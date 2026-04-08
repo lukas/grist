@@ -1,4 +1,4 @@
-/** IPC contracts (preload ↔ renderer ↔ main). */
+/** IPC contracts (preload <-> renderer <-> main). */
 
 export const IPC = {
   ping: "grist:ping",
@@ -7,31 +7,28 @@ export const IPC = {
   recentRepos: "grist:recentRepos",
   initRepo: "grist:initRepo",
   isGitRepo: "grist:isGitRepo",
-  createJob: "grist:createJob",
-  getJob: "grist:getJob",
-  listJobs: "grist:listJobs",
-  updateJob: "grist:updateJob",
-  runPlanner: "grist:runPlanner",
-  startScheduler: "grist:startScheduler",
-  stopScheduler: "grist:stopScheduler",
-  getTasks: "grist:getTasks",
-  getArtifacts: "grist:getArtifacts",
-  getEvents: "grist:getEvents",
-  getTaskEvents: "grist:getTaskEvents",
-  getJobLevelEvents: "grist:getJobLevelEvents",
+
+  // Unified task API
+  createTask: "grist:createTask",
+  startTask: "grist:startTask",
+  listRootTasks: "grist:listRootTasks",
+  getRootTask: "grist:getRootTask",
+  getChildTasks: "grist:getChildTasks",
+  getEventsForTask: "grist:getEventsForTask",
+  getAllEvents: "grist:getAllEvents",
+  stopTask: "grist:stopTask",
+  rootTaskControl: "grist:rootTaskControl",
+  taskControl: "grist:taskControl",
+
+  // Settings
   getSettings: "grist:getSettings",
   setSettings: "grist:setSettings",
-  taskControl: "grist:taskControl",
-  jobControl: "grist:jobControl",
-  runReducerNow: "grist:runReducerNow",
-  spawnPatchTask: "grist:spawnPatchTask",
-  spawnVerifier: "grist:spawnVerifier",
-  snapshot: "grist:snapshot",
+
+  // Utility
   openPath: "grist:openPath",
   logsDir: "grist:logsDir",
-  taskLog: "grist:taskLog",
-  subscribe: "grist:subscribe",
-  /** Main → renderer push (orchestrator updates). */
+
+  /** Main -> renderer push (orchestrator updates). */
   events: "grist:events",
 } as const;
 
@@ -43,11 +40,17 @@ export type TaskControlAction =
   | { type: "reprioritize"; taskId: number; priority: number }
   | { type: "enqueue"; taskId: number };
 
+/** @deprecated use RootTaskControlAction — kept for backend compat */
 export type JobControlAction =
   | { type: "pause_all"; jobId: number }
   | { type: "resume_all"; jobId: number }
   | { type: "stop_run"; jobId: number }
   | { type: "summarize_now"; jobId: number };
 
-/** Main process `webContents.send(IPC.events, …)` payload. */
+export type RootTaskControlAction =
+  | { type: "pause_all"; rootTaskId: number }
+  | { type: "resume_all"; rootTaskId: number }
+  | { type: "stop_run"; rootTaskId: number };
+
+/** Main process `webContents.send(IPC.events, ...)` payload. */
 export type GristEvent = { kind: string; jobId?: number; taskId?: number; data?: unknown };

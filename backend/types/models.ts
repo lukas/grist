@@ -23,6 +23,7 @@ export type TaskStatus =
   | "superseded";
 
 export type TaskKind =
+  | "root"
   | "planner"
   | "analysis"
   | "reducer"

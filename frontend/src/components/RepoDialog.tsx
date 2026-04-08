@@ -53,9 +53,12 @@ export function RepoDialog({ onSelect, onCancel }: Props) {
 
   const createNew = async () => {
     setError("");
-    const result = await window.grist.initRepo();
+    const target = pathInput.trim() || undefined;
+    const result = await window.grist.initRepo(target);
     if (result) {
       onSelect(result);
+    } else if (target) {
+      setError("Failed to create repo at that path.");
     }
   };
 

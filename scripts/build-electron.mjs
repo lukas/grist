@@ -33,6 +33,12 @@ await esbuild.build({
   outfile: join(root, "dist-electron/preload.cjs"),
 });
 
+await esbuild.build({
+  ...common,
+  entryPoints: [join(root, "cli/grist-cli.ts")],
+  outfile: join(root, "dist-electron/grist-cli.js"),
+});
+
 copyFileSync(join(root, "backend/db/schema.sql"), join(root, "dist-electron/schema.sql"));
 
 const assetsOut = join(root, "dist-electron/../assets");

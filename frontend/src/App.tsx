@@ -10,7 +10,7 @@ export default function App() {
   const [repo, setRepo] = useState("");
   const [goal, setGoal] = useState("");
   const [notes, setNotes] = useState("");
-  const [jobId, setJobId] = useState<number | null>(null);
+  const [rootTaskId, setRootTaskId] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -30,16 +30,14 @@ export default function App() {
 
   useEffect(() => { loadProvider(); }, [loadProvider]);
 
-  // Auto-load most recent job on startup
   useEffect(() => {
-    void window.grist?.listJobs().then((rows) => {
-      const jobs = rows as { id: number; repo_path: string; user_goal: string; operator_notes?: string }[];
-      if (jobs.length > 0) {
-        const latest = jobs[jobs.length - 1];
-        setJobId(latest.id);
+    void window.grist?.listRootTasks().then((rows) => {
+      const tasks = rows as RootTaskSummary[];
+      if (tasks.length > 0) {
+        const latest = tasks[0];
+        setRootTaskId(latest.id);
         setRepo(latest.repo_path);
         setGoal(latest.user_goal);
-        if (latest.operator_notes) setNotes(latest.operator_notes);
       }
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -72,12 +70,20 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!rootTaskId) return;
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
-  }, [jobId, refresh]);
+  }, [rootTaskId, refresh]);
 
   const openRepoDialog = () => setRepoDialogOpen(true);
+
+  const switchRepo = (repoPath: string) => {
+    setRepo(repoPath);
+    setRootTaskId(null);
+    setSelectedTaskId(null);
+    setGoal("");
+    setNotes("");
+  };
 
   const onRepoSelected = (repoPath: string) => {
     setRepo(repoPath);
@@ -89,21 +95,21 @@ export default function App() {
   };
 
   const startRun = async (repoPath: string) => {
-    const id = await window.grist.createJob({ repoPath, goal: goal.trim(), operatorNotes: notes });
-    setJobId(id);
-    await window.grist.runPlanner(id);
-    await window.grist.startScheduler(id);
+    const id = await window.grist.createTask({ repoPath, goal: goal.trim(), notes });
+    setRootTaskId(id);
+    await window.grist.startTask(id);
     refresh();
   };
 
-  const loadJob = (id: number) => {
-    setJobId(id);
+  const loadTask = (id: number) => {
+    setRootTaskId(id);
     setSelectedTaskId(null);
-    void window.grist.getJob(id).then((j) => {
-      const jr = j as Record<string, unknown>;
-      if (jr.repo_path) setRepo(String(jr.repo_path));
-      if (jr.user_goal) setGoal(String(jr.user_goal));
-      if (jr.operator_notes) setNotes(String(jr.operator_notes));
+    void window.grist.getRootTask(id).then((t) => {
+      if (!t) return;
+      const rt = t as RootTaskRow;
+      if (rt.repo_path) setRepo(rt.repo_path);
+      if (rt.user_goal) setGoal(rt.user_goal);
+      if (rt.operator_notes) setNotes(rt.operator_notes);
     });
     refresh();
   };
@@ -131,11 +137,12 @@ export default function App() {
       <MissionControl
         repo={repo}
         goal={goal}
-        jobId={jobId}
+        rootTaskId={rootTaskId}
         tick={tick}
         onGoalChange={setGoal}
         onNotesChange={setNotes}
         notes={notes}
+        onSelectRepo={switchRepo}
         onPickRepo={openRepoDialog}
         onCreateRun={createAndPlan}
         provider={provider}
@@ -144,15 +151,16 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <div className="w-64 shrink-0 overflow-hidden border-r border-border/50 bg-panel p-2">
           <TaskList
-            jobId={jobId}
+            repo={repo}
+            rootTaskId={rootTaskId}
             tick={tick}
             selectedId={selectedTaskId}
             onSelect={setSelectedTaskId}
-            onLoadJob={loadJob}
+            onLoadRootTask={loadTask}
           />
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-panel">
-          <TaskDetail jobId={jobId} taskId={selectedTaskId} tick={tick} onRefresh={refresh} />
+          <TaskDetail rootTaskId={rootTaskId} taskId={selectedTaskId} tick={tick} onRefresh={refresh} />
         </div>
       </div>
       {settingsOpen && <SettingsModal onClose={() => { setSettingsOpen(false); loadProvider(); }} />}

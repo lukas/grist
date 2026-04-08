@@ -175,20 +175,38 @@ Open questions: ${task.open_questions_json}${historyBlock}`;
     emit("info", "prompt", `step ${stepNum}`, { system: sys, user, step: stepNum });
     log({ timestamp: new Date().toISOString(), step: stepNum, type: "prompt", data: { system: sys, user } });
 
+    const MAX_RETRIES = 3;
     let resp;
-    try {
-      resp = await provider.generateStructured({
-        systemPrompt: sys,
-        userPrompt: user,
-        maxTokens: canWrite ? 8192 : 2048,
-        temperature: 0.2,
-      });
-    } catch (e) {
-      emit("error", "model_error", String(e));
-      log({ timestamp: new Date().toISOString(), step: stepNum, type: "error", data: { error: String(e) } });
-      updateTask(taskId, { status: "failed", blocker: String(e) });
-      break;
+    updateTask(taskId, { current_action: "thinking" });
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        touchTaskActivity(taskId);
+        resp = await provider.generateStructured({
+          systemPrompt: sys,
+          userPrompt: user,
+          maxTokens: canWrite ? 16384 : 4096,
+          temperature: 0.2,
+        });
+        break;
+      } catch (e) {
+        const isLastAttempt = attempt === MAX_RETRIES;
+        emit(
+          isLastAttempt ? "error" : "warn",
+          "model_error",
+          `${String(e)} (attempt ${attempt}/${MAX_RETRIES})`,
+        );
+        log({ timestamp: new Date().toISOString(), step: stepNum, type: "error", data: { error: String(e), attempt } });
+        if (isLastAttempt) {
+          updateTask(taskId, { status: "failed", blocker: String(e) });
+        } else {
+          const backoffMs = 1000 * Math.pow(2, attempt - 1);
+          await new Promise((r) => setTimeout(r, backoffMs));
+          touchTaskActivity(taskId);
+        }
+      }
     }
+    if (!resp) break;
+    updateTask(taskId, { current_action: `step ${stepNum}` });
 
     addJobTokenUsage(task.job_id, resp.tokensIn + resp.tokensOut, resp.estimatedCost);
     const tokens = task.tokens_used + resp.tokensIn + resp.tokensOut;
@@ -210,8 +228,30 @@ Open questions: ${task.open_questions_json}${historyBlock}`;
           }
         })();
 
-      // Recovery: if JSON parse failed and response was truncated (hit maxTokens),
-      // extract what we can from the partial JSON
+      // Recovery: if JSON parse failed and response was truncated, retry with more tokens
+      if (raw == null && resp.finishReason === "length") {
+        const baseMax = canWrite ? 16384 : 4096;
+        const doubledMax = baseMax * 2;
+        if (resp.tokensOut >= baseMax * 0.9) {
+          emit("warn", "truncated_retry", `Response truncated at ${resp.tokensOut} tokens, retrying with ${doubledMax}`);
+          touchTaskActivity(taskId);
+          try {
+            const retryResp = await provider.generateStructured({
+              systemPrompt: sys,
+              userPrompt: user,
+              maxTokens: doubledMax,
+              temperature: 0.2,
+            });
+            addJobTokenUsage(task.job_id, retryResp.tokensIn + retryResp.tokensOut, retryResp.estimatedCost);
+            touchTaskActivity(taskId);
+            const retryParsed = retryResp.parsedJson ?? (() => { try { return JSON.parse(retryResp.text) as unknown; } catch { return null; } })();
+            if (retryParsed != null) {
+              raw = retryParsed;
+              resp = retryResp;
+            }
+          } catch { /* fall through to partial recovery */ }
+        }
+      }
       if (raw == null && resp.finishReason === "length") {
         const toolMatch = resp.text.match(/"tool_name"\s*:\s*"(\w+)"/);
         if (toolMatch) {
@@ -248,10 +288,15 @@ Open questions: ${task.open_questions_json}${historyBlock}`;
       if (obj.reasoning && !obj.reasoning_summary) obj.reasoning_summary = obj.reasoning;
       decision = WorkerDecisionSchema.parse(obj);
     } catch (e) {
-      emit("error", "parse_error", String(e), { raw: resp.text.slice(0, 2000) });
+      consecutiveErrors++;
+      emit("warn", "parse_error", `${String(e)} (${consecutiveErrors}/3 consecutive)`, { raw: resp.text.slice(0, 2000) });
       log({ timestamp: new Date().toISOString(), step: stepNum, type: "error", data: { parse_error: String(e), raw: resp.text.slice(0, 4000) } });
-      updateTask(taskId, { status: "failed", blocker: "invalid model JSON" });
-      break;
+      if (consecutiveErrors >= 3) {
+        updateTask(taskId, { status: "failed", blocker: "invalid model JSON (3 consecutive parse errors)" });
+        break;
+      }
+      history.push({ role: "tool_result", content: `[system] Your previous response was not valid JSON. Please respond with a valid JSON object.` });
+      continue;
     }
 
     emit("info", "model_response", `step ${stepNum}: ${decision.decision}`, {

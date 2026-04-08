@@ -19,66 +19,98 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 
 **Native module:** `better-sqlite3` must match the Node ABI. `npm run dev` / `npm start` run `electron-rebuild -f -w better-sqlite3`. `npm test` runs `npm rebuild better-sqlite3` first (Vitest uses system Node, not Electron).
 
-**Black screen in dev:** A strict `Content-Security-Policy` meta (e.g. `script-src 'self'` only) blocks Vite HMR (`unsafe-eval`). The app HTML intentionally omits a tight CSP for this local Electron shell.
-
-**`window.grist` missing:** Preload is built as **`dist-electron/preload.cjs` (CommonJS)**. ESM `preload.js` with root `package.json` `"type":"module"` often fails to run under Electron’s preload loader, so `contextBridge` never runs.
-
-**Main bundle + `dotenv`:** `dist-electron/main.js` is ESM from esbuild. **`dotenv` must stay `external`** in `scripts/build-electron.mjs`. Bundling it inlines CJS that does `require("fs")` → Electron error *Dynamic require of "fs" is not supported*.
-
 ### Paths
 
-- **DB:** `app.getPath('userData')/grist.sqlite` (persists across restarts; stores all jobs/tasks/events)
-- **Logs:** `<repo>/.grist/logs/job-N/task-N.jsonl` (JSONL per task, stored in the repo itself; `.grist` auto-added to `.gitignore`)
-- **Scratch/worktrees:** `userData/workspace/jobs/<jobId>/…` (override via settings `appWorkspaceRoot`)
-- **Schema file:** copied to `dist-electron/schema.sql` on electron build; runtime loads via `fileURLToPath` + fallbacks (`backend/db/db.ts`)
+- **DB:** `app.getPath('userData')/grist.sqlite`
+- **Logs:** `<repo>/.grist/logs/job-N/task-N.jsonl`
+- **Scratch/worktrees:** `userData/workspace/jobs/<jobId>/…`
+- **Schema file:** copied to `dist-electron/schema.sql` on electron build
 
 ## Architecture map
+
+### Unified task model
+
+Everything is a **task**. The old "jobs" table is kept internally but hidden behind `rootTaskFacade.ts`.
+
+| Concept | Description |
+|---------|-------------|
+| **Root task** | Top-level task created by user (`kind=root`). The only entity the frontend sees. |
+| **Planner task** | `kind=planner`, child of root. Plans subtasks. |
+| **Work tasks** | Analysis/implementation tasks created by the planner. Children of root. |
+| **Subtasks** | Spawned by work tasks via `spawn_subtasks`. Children of their parent. |
+
+### Key files
 
 | Area | Path |
 |------|------|
 | Electron main, IPC | `electron/main.ts`, `electron/preload.ts` |
-| IPC names | `shared/ipc.ts` |
+| IPC contracts | `shared/ipc.ts` |
 | DB schema | `backend/db/schema.sql` |
 | Repos | `backend/db/*Repo.ts` |
-| Orchestrator | `backend/orchestrator/appOrchestrator.ts` (facade), `planner.ts`, `scheduler.ts`, `workerRunner.ts`, `reducer.ts`, `verifier.ts` |
+| **Root task facade** | `backend/db/rootTaskFacade.ts` |
+| Orchestrator | `backend/orchestrator/appOrchestrator.ts`, `planner.ts`, `scheduler.ts`, `workerRunner.ts`, `reducer.ts`, `verifier.ts` |
 | Providers | `backend/providers/*` + `providerFactory.ts` |
-| Tools | `backend/tools/executeTool.ts` (+ split modules) |
-| Workspace | `backend/workspace/*` |
+| Tools | `backend/tools/executeTool.ts` |
 | React UI | `frontend/src/App.tsx`, `frontend/src/components/*` |
-| Mission bar | **Enter** in goal or notes runs **Plan & run**. If no repo selected → opens **RepoDialog** (recent repos, browse, paste path, create new via `git init`). |
-| RepoDialog | `frontend/src/components/RepoDialog.tsx`. IPC: `recentRepos` (from jobs table), `isGitRepo`, `initRepo`. |
-| Left sidebar | `TaskList.tsx` — **nested tree** of all jobs (newest first). Each job expands to show **Planner** (job-level events) + task tree (hierarchical via `parent_task_id`). Clicking a job switches to it. |
-| Main panel | `TaskDetail.tsx` — **chat-style dialog**. Events grouped by step; reasoning shown as text, tool call+result as ONE compact line (`✓ write_file → index.html`). Click to expand args/result/prompt/raw. |
-| Layout | 2-column: 256px sidebar + flexible main. No separate event stream or right panel — everything in the chat view. |
-| Logs | `backend/logging/taskLogger.ts` → `<repo>/.grist/logs/job-N/task-N.jsonl` (JSONL per task). `.grist` auto-added to `.gitignore`. |
+
+### Frontend → IPC API
+
+The frontend uses **only** the unified task API. No `jobId` anywhere in the renderer.
+
+| IPC channel | Purpose |
+|-------------|---------|
+| `createTask` | Create root task (returns root task ID) |
+| `startTask` | Plan + start scheduler in one call |
+| `listRootTasks` | List root tasks (most recent first), optional repo filter |
+| `getRootTask` | Get root task by ID |
+| `getChildTasks` | Get child tasks for a root task (excludes root/planner kinds) |
+| `getEventsForTask` | Events by task ID (no jobId needed) |
+| `getAllEvents` | All events for a root task's job |
+| `stopTask` | Stop a root task |
+| `rootTaskControl` | Pause/resume/stop a root task |
+| `taskControl` | Pause/stop/redirect/fork individual tasks |
+
+### Frontend components
+
+| Component | Behavior |
+|-----------|----------|
+| `App.tsx` | State: `rootTaskId`, `selectedTaskId`. Uses `createTask`/`startTask` to run. |
+| `MissionControl` | Header bar. Repo picker, provider dot, pause/resume/stop via `rootTaskControl`. |
+| `TaskList` | Left sidebar. Root tasks as expandable nodes, child tasks as tree. Filters out `root`/`planner` kinds. |
+| `TaskDetail` | Main panel. Chat-style event view. Loads events via `getEventsForTask(taskId)`. |
 
 ## Contracts / invariants
 
-- **LLM planner** — `planner.ts` scans repo (file list), sends context to LLM, which decides task count/type/deps. Primary objective: minimize wall-clock time. Post-validation enforces parallelism rules: empty repos → 1 task, small repos (<30 files) → consolidated, parallel impl tasks merged (write conflicts). Falls back to sensible defaults on LLM failure. All reasoning logged as job-level events.
-- **Parallel tool calls** — Workers support `call_tool` (single) and `call_tools` (parallel array). `WorkerDecisionSchema` in `backend/types/taskState.ts`. Parallel calls run via `Promise.all`. Normalizer accepts alternate field names `tool`/`args`/`reasoning` → `tool_name`/`tool_args`/`reasoning_summary`.
-- **maxTokens** — write-capable tasks get `8192` tokens; read-only get `2048`. Prevents truncated `write_file` JSON when creating large files.
-- **Truncated response recovery** — if `finishReason === "length"`, worker tries to extract tool_name and tool_args from partial JSON instead of failing immediately.
-- **Smart history** — `write_file`/`apply_patch` results summarized as success/fail in history (model already knows contents). Other results get up to 3000 chars.
-- **Tool allowlist** — `task.allowed_tools_json`; `run_command_safe` / `run_tests` also gated by `settings.commandAllowlist` (defaults in `appSettings.ts`).
-- **Writes** — `write_file` / `apply_patch` only under `task.worktree_path` when set.
-- **Events** — tool calls and orchestration should call `insertEvent` (worker emits via `ToolContext.emit`).
-- **Conversation history** — worker prompt includes previous tool calls + results so the model can iterate instead of repeating. System prompt tells model not to re-read files it just wrote.
-- **Auto-pause** — workers auto-pause after: (a) 3× identical tool call, (b) 5 consecutive tool errors, (c) 3 steps with empty tool name. Emits `auto_pause` event + toast banner in UI via `AutoPauseBanner.tsx`.
-- **Pause** — job-level pause: workers spin until `job.status !== 'paused'`; task-level pause: same + `task.status === 'paused'`. **Stop** aborts in-flight work via `AbortController`.
+- **Root task facade** — `rootTaskFacade.ts` wraps `insertJob` + `insertTask(kind='root')`. Root task ID is the only ID the frontend uses. `rootTaskToJobId()` resolves internally.
+- **Planner is a real task** — `planner.ts` inserts `kind=planner` task as child of root. Events go to `task_id=plannerTaskId`.
+- **Scheduler skips root/planner** — `NON_SCHEDULABLE_KINDS = {root, planner}`.
+- **Auto-pause** — 3× identical tool call, 5 consecutive errors, 3 empty tool names.
+- **Stall detection** — debounced (one event per episode), escalation: warn@30s, pause@5min, fail@15min. Tasks in `current_action: "thinking"` are exempt.
 
 ## Provider env / settings
 
-SQLite `settings` table **or** repo-root **`.env`** (gitignored; see `.env.example`). `loadAppSettings()` prefers **`.env` values when set**, falling back to DB. Prefix: `GRIST_*` (e.g. `GRIST_KIMI_BASE_URL`, `GRIST_KIMI_API_KEY`, `GRIST_KIMI_MODEL`, `GRIST_DEFAULT_PROVIDER`). If Kimi URL or key is set and `GRIST_DEFAULT_PROVIDER` is unset, default provider is **kimi**. Also accepts `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` when `GRIST_*` variants are absent.
+SQLite `settings` table **or** repo-root **`.env`** (gitignored). `loadAppSettings()` prefers `.env` values when set. Prefix: `GRIST_*`. Also accepts `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
 
-**Kimi K2.5** is a reasoning model — responses include `reasoning_content` (chain-of-thought) and `content`. Provider falls back to `reasoning_content` when `content` is null.
+## CLI
 
-## Known gaps / follow-ups
+```bash
+node dist-electron/grist-cli.js <command>
+```
 
-- **Command palette** and **open in editor** not implemented.
-- Reducer/verifier need real providers for useful output; **mock** provider drives deterministic CI/offline loops.
+Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `summary`, `watch`, `pause`/`resume`/`stop`. All take root task IDs.
 
-## Implementation log (running)
+## Known gaps
+
+- Command palette and open-in-editor not implemented.
+- Reducer/verifier need real providers for useful output.
+- Schema migration (merge jobs into tasks table) is a future follow-up.
+- See `docs/IMPROVEMENT_IDEAS.md` for future enhancement ideas.
+
+## Implementation log
 
 | Date | Change |
 |------|--------|
-| 2026-04-06 | Initial grV0: Electron+Vite+React+Tailwind, SQLite schema, planner/scheduler/worker/reducer/verifier, tools, IPC UI, vitest (deps + allowlist + DB), docs + checklist. |
+| 2026-04-06 | Initial v0: Electron+Vite+React+Tailwind, SQLite, planner/scheduler/worker, tools, IPC UI. |
+| 2026-04-08 | Unified task model: root task facade, planner as real task. |
+| 2026-04-08 | Bug fixes: retry on model errors, stall dedup, job status reflects failed tasks, maxTokens 8K→16K. |
+| 2026-04-08 | Frontend fully wired to unified task API. Removed all `jobId` references from renderer. Deleted orphaned components (EventStream, PatchComparison, GlobalFindings, MemoryDrawer, MemoryViewer, SkillsModal). |

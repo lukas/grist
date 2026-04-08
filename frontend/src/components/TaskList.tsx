@@ -1,148 +1,101 @@
 import { useEffect, useState } from "react";
 
-type Task = {
-  id: number;
-  role: string;
-  kind: string;
-  status: string;
-  assigned_model_provider: string;
-  confidence: number;
-  tokens_used: number;
-  steps_used: number;
-  max_steps: number;
-  workspace_repo_mode: string;
-  goal: string;
-  findings_json: string;
-  dependencies_json: string;
-  parent_task_id: number | null;
-  blocker: string;
-};
-
-type JobSummary = {
-  id: number;
-  user_goal: string;
-  status: string;
-  repo_path: string;
-  created_at: string;
-};
-
-/* Sentinel IDs for virtual nodes */
-const PLANNER_OFFSET = -1_000_000;
-const plannerIdFor = (jobId: number) => PLANNER_OFFSET - jobId;
-const isPlannerNode = (id: number) => id <= PLANNER_OFFSET;
-const jobIdFromPlanner = (id: number) => -(id - PLANNER_OFFSET);
-
-export { isPlannerNode, jobIdFromPlanner };
+const NON_DISPLAY_KINDS = new Set(["root", "planner"]);
 
 export function TaskList({
-  jobId,
+  repo,
+  rootTaskId,
   tick,
   selectedId,
   onSelect,
-  onLoadJob,
+  onLoadRootTask,
 }: {
-  jobId: number | null;
+  repo: string;
+  rootTaskId: number | null;
   tick: number;
   selectedId: number | null;
   onSelect: (id: number | null) => void;
-  onLoadJob: (jobId: number) => void;
+  onLoadRootTask: (rootTaskId: number) => void;
 }) {
-  const [allJobs, setAllJobs] = useState<JobSummary[]>([]);
-  const [tasksByJob, setTasksByJob] = useState<Record<number, Task[]>>({});
+  const [allRootTasks, setAllRootTasks] = useState<RootTaskSummary[]>([]);
+  const [childTasksByRoot, setChildTasksByRoot] = useState<Record<number, ChildTask[]>>({});
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
-  // Load all jobs
   useEffect(() => {
-    void window.grist.listJobs().then((rows) => {
-      const jobs = (rows as JobSummary[]).slice().reverse();
-      setAllJobs(jobs);
+    void window.grist.listRootTasks(repo || undefined).then((rows) => {
+      setAllRootTasks(rows as RootTaskSummary[]);
     });
-  }, [tick]);
+  }, [tick, repo]);
 
-  // Auto-expand current job
   useEffect(() => {
-    if (jobId) setExpanded((prev) => new Set(prev).add(jobId));
-  }, [jobId]);
+    if (rootTaskId) setExpanded((prev) => new Set(prev).add(rootTaskId));
+  }, [rootTaskId]);
 
-  // Load tasks for expanded jobs
   useEffect(() => {
-    for (const jid of expanded) {
-      void window.grist.getTasks(jid).then((t) => {
-        setTasksByJob((prev) => ({ ...prev, [jid]: t as Task[] }));
+    for (const rid of expanded) {
+      void window.grist.getChildTasks(rid).then((t) => {
+        const tasks = (t as ChildTask[]).filter((c) => !NON_DISPLAY_KINDS.has(c.kind));
+        setChildTasksByRoot((prev) => ({ ...prev, [rid]: tasks }));
       });
     }
   }, [expanded, tick]);
 
-  const toggleExpand = (jid: number) => {
+  const toggleExpand = (rid: number) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(jid)) next.delete(jid);
-      else next.add(jid);
+      if (next.has(rid)) next.delete(rid);
+      else next.add(rid);
       return next;
     });
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto text-xs">
-      <h2 className="shrink-0 pb-1 font-semibold text-white">Jobs &amp; Tasks</h2>
+      <h2 className="shrink-0 pb-1 font-semibold text-white">Tasks</h2>
 
-      {allJobs.length === 0 && (
-        <p className="text-muted">No jobs yet. Enter a goal and run.</p>
+      {allRootTasks.length === 0 && (
+        <p className="text-muted">No tasks yet. Enter a goal and run.</p>
       )}
 
-      {allJobs.map((job) => {
-        const isActive = job.id === jobId;
-        const isExpanded = expanded.has(job.id);
-        const tasks = tasksByJob[job.id] || [];
+      {allRootTasks.map((rt) => {
+        const isActive = rt.id === rootTaskId;
+        const isExpanded = expanded.has(rt.id);
+        const children = childTasksByRoot[rt.id] || [];
 
         return (
-          <div key={job.id} className="mb-0.5">
-            {/* Job header */}
+          <div key={rt.id} className="mb-0.5">
             <div
               className={`flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 ${
                 isActive ? "bg-accent/20 text-white" : "text-gray-300 hover:bg-white/5"
               }`}
               onClick={() => {
-                if (!isActive) onLoadJob(job.id);
-                toggleExpand(job.id);
+                if (!isActive) onLoadRootTask(rt.id);
+                toggleExpand(rt.id);
               }}
-              onKeyDown={(e) => e.key === "Enter" && toggleExpand(job.id)}
+              onKeyDown={(e) => e.key === "Enter" && toggleExpand(rt.id)}
               role="button"
               tabIndex={0}
             >
               <span className="text-[10px] text-muted">{isExpanded ? "▼" : "▶"}</span>
-              <span className="font-medium">#{job.id}</span>
-              <span className="flex-1 truncate">{job.user_goal}</span>
-              <JobBadge status={job.status} />
+              <span className="flex-1 truncate">{rt.user_goal}</span>
+              <StatusBadge status={rt.status} />
             </div>
 
-            {/* Nested children */}
             {isExpanded && (
               <div className="ml-3 border-l border-border/40 pl-1.5">
-                {/* Planner node */}
-                <TreeNode
-                  label="Planner"
-                  sublabel="job-level"
-                  status={job.status === "completed" ? "done" : job.status}
-                  isSelected={selectedId === plannerIdFor(job.id)}
-                  onClick={() => {
-                    if (!isActive) onLoadJob(job.id);
-                    onSelect(plannerIdFor(job.id));
-                  }}
-                  depth={0}
-                />
-
-                {/* Task tree */}
                 <TaskTree
-                  tasks={tasks}
+                  tasks={children}
                   parentId={null}
                   selectedId={selectedId}
                   onSelect={(id) => {
-                    if (!isActive) onLoadJob(job.id);
+                    if (!isActive) onLoadRootTask(rt.id);
                     onSelect(id);
                   }}
                   depth={0}
                 />
+                {children.length === 0 && (
+                  <p className="py-0.5 text-[10px] text-muted">No subtasks yet</p>
+                )}
               </div>
             )}
           </div>
@@ -152,7 +105,6 @@ export function TaskList({
   );
 }
 
-/** Recursively render tasks that share a parentId */
 function TaskTree({
   tasks,
   parentId,
@@ -160,7 +112,7 @@ function TaskTree({
   onSelect,
   depth,
 }: {
-  tasks: Task[];
+  tasks: ChildTask[];
   parentId: number | null;
   selectedId: number | null;
   onSelect: (id: number) => void;
@@ -197,9 +149,9 @@ function TaskNode({
   onSelect,
   depth,
 }: {
-  task: Task;
+  task: ChildTask;
   hasChildren: boolean;
-  allTasks: Task[];
+  allTasks: ChildTask[];
   selectedId: number | null;
   onSelect: (id: number) => void;
   depth: number;
@@ -300,16 +252,16 @@ function StatusDot({ status }: { status: string }) {
   return <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${color}`} />;
 }
 
-function JobBadge({ status }: { status: string }) {
+function StatusBadge({ status }: { status: string }) {
   let cls = "bg-gray-700 text-gray-300";
   if (status === "running") cls = "bg-emerald-800 text-emerald-200";
-  else if (status === "completed") cls = "bg-blue-800 text-blue-200";
+  else if (status === "done" || status === "completed") cls = "bg-blue-800 text-blue-200";
   else if (status === "failed") cls = "bg-red-800 text-red-200";
   else if (status === "stopped") cls = "bg-gray-700 text-gray-300";
   return <span className={`shrink-0 rounded px-1 py-px text-[10px] ${cls}`}>{status}</span>;
 }
 
-function taskSublabel(t: Task): string {
+function taskSublabel(t: ChildTask): string {
   const parts: string[] = [];
   if (t.steps_used > 0) parts.push(`${t.steps_used}/${t.max_steps}`);
   if (t.tokens_used > 0) parts.push(`${t.tokens_used} tok`);

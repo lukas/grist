@@ -4,13 +4,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { openDatabase, closeDatabase, getDb } from "../backend/db/db.js";
-import { repoLogsDir, readTaskLog, ensureGristDir } from "../backend/logging/taskLogger.js";
+import { repoLogsDir, ensureGristDir } from "../backend/logging/taskLogger.js";
 import { loadDotenvFile } from "../backend/settings/loadDotenv.js";
 import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { IPC } from "../shared/ipc.js";
 import { getSetting, setSetting, loadAppSettings, saveAppSettingsPatch } from "../backend/settings/appSettings.js";
-import { updateJob } from "../backend/db/jobRepo.js";
-import type { TaskControlAction, JobControlAction } from "../shared/ipc.js";
+import { createRootTask, listRootTasks, getRootTask, rootTaskToJobId, getChildTasks } from "../backend/db/rootTaskFacade.js";
+import { listEventsByTaskId, listEvents } from "../backend/db/eventRepo.js";
+import type { TaskControlAction, RootTaskControlAction } from "../shared/ipc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -34,7 +35,7 @@ function createWindow(): void {
   const appIcon = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined;
 
   if (appIcon && process.platform === "darwin") {
-    app.dock.setIcon(appIcon);
+    app.dock?.setIcon(appIcon);
   }
 
   mainWindow = new BrowserWindow({
@@ -79,7 +80,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.dbPath, () => join(app.getPath("userData"), "grist.sqlite"));
 
   ipcMain.handle(IPC.pickRepo, async () => {
-    const r = await dialog.showOpenDialog(mainWindow!, {
+    const r = await dialog.showOpenDialog({
       properties: ["openDirectory", "createDirectory"],
     });
     if (r.canceled || !r.filePaths[0]) return null;
@@ -106,7 +107,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.initRepo, async (_, dirPath?: string) => {
     let target = dirPath;
     if (!target) {
-      const r = await dialog.showOpenDialog(mainWindow!, {
+      const r = await dialog.showOpenDialog({
         properties: ["openDirectory", "createDirectory"],
         title: "Choose folder for new git repo",
       });
@@ -114,19 +115,23 @@ function registerIpc(): void {
       target = r.filePaths[0];
     }
     try {
+      mkdirSync(target, { recursive: true });
       execFileSync("git", ["init"], { cwd: target, stdio: "pipe" });
       return target;
-    } catch (e) {
+    } catch {
       return null;
     }
   });
 
-  ipcMain.handle(IPC.createJob, (_, payload: { repoPath: string; goal: string; operatorNotes?: string }) => {
+  // --- Unified task API ---
+
+  ipcMain.handle(IPC.createTask, (_, payload: { repoPath: string; goal: string; notes?: string }) => {
     const s = loadAppSettings();
-    return orchestrator.createJob({
+    ensureGristDir(payload.repoPath);
+    return createRootTask({
       repoPath: payload.repoPath,
       goal: payload.goal,
-      operatorNotes: payload.operatorNotes,
+      notes: payload.notes,
       defaultProvider: s.defaultProvider,
       plannerProvider: s.plannerProvider,
       reducerProvider: s.reducerProvider,
@@ -134,39 +139,39 @@ function registerIpc(): void {
     });
   });
 
-  ipcMain.handle(IPC.getJob, (_, id: number) => orchestrator.listAllJobs().find((j) => j.id === id) ?? null);
-
-  ipcMain.handle(IPC.listJobs, () => orchestrator.listAllJobs());
-
-  ipcMain.handle(IPC.updateJob, (_, id: number, patch: { operator_notes?: string; user_goal?: string }) => {
-    updateJob(id, patch);
-    return true;
-  });
-
-  ipcMain.handle(IPC.runPlanner, async (_, jobId: number) => {
+  ipcMain.handle(IPC.startTask, async (_, rootTaskId: number) => {
+    const jobId = rootTaskToJobId(rootTaskId);
+    if (!jobId) return false;
     await orchestrator.planJob(jobId);
-    return true;
-  });
-
-  ipcMain.handle(IPC.startScheduler, (_, jobId: number) => {
     orchestrator.startScheduler(jobId);
     return true;
   });
 
-  ipcMain.handle(IPC.stopScheduler, (_, jobId: number) => {
-    orchestrator.stopScheduler(jobId);
-    return true;
+  ipcMain.handle(IPC.listRootTasks, (_, repo?: string) => listRootTasks(repo));
+
+  ipcMain.handle(IPC.getRootTask, (_, rootTaskId: number) => getRootTask(rootTaskId));
+
+  ipcMain.handle(IPC.getChildTasks, (_, rootTaskId: number) => getChildTasks(rootTaskId));
+
+  ipcMain.handle(IPC.getEventsForTask, (_, taskId: number) => listEventsByTaskId(taskId));
+
+  ipcMain.handle(IPC.getAllEvents, (_, rootTaskId: number) => {
+    const jobId = rootTaskToJobId(rootTaskId);
+    if (!jobId) return [];
+    return listEvents(jobId);
   });
 
-  ipcMain.handle(IPC.getTasks, (_, jobId: number) => orchestrator.snapshot(jobId).tasks);
-  ipcMain.handle(IPC.getArtifacts, (_, jobId: number) => orchestrator.snapshot(jobId).artifacts);
-  ipcMain.handle(IPC.getEvents, (_, jobId: number) => orchestrator.snapshot(jobId).events);
-  ipcMain.handle(IPC.getTaskEvents, (_, jobId: number, taskId: number) => orchestrator.taskEvents(jobId, taskId));
-  ipcMain.handle(IPC.getJobLevelEvents, (_, jobId: number) => orchestrator.jobLevelEvents(jobId));
-
-  ipcMain.handle(IPC.getSettings, () => loadAppSettings());
-  ipcMain.handle(IPC.setSettings, (_, p: Record<string, unknown>) => {
-    saveAppSettingsPatch(p as never);
+  ipcMain.handle(IPC.rootTaskControl, (_, a: RootTaskControlAction) => {
+    const jobId = rootTaskToJobId(a.rootTaskId);
+    if (!jobId) return false;
+    if (a.type === "pause_all") {
+      orchestrator.jobControl({ type: "pause_all", jobId });
+    } else if (a.type === "resume_all") {
+      orchestrator.jobControl({ type: "resume_all", jobId });
+      orchestrator.startScheduler(jobId);
+    } else if (a.type === "stop_run") {
+      orchestrator.jobControl({ type: "stop_run", jobId });
+    }
     return true;
   });
 
@@ -175,35 +180,28 @@ function registerIpc(): void {
     return true;
   });
 
-  ipcMain.handle(IPC.jobControl, (_, a: JobControlAction) => {
-    orchestrator.jobControl(a);
+  ipcMain.handle(IPC.stopTask, (_, rootTaskId: number) => {
+    const jobId = rootTaskToJobId(rootTaskId);
+    if (!jobId) return false;
+    orchestrator.jobControl({ type: "stop_run", jobId });
     return true;
   });
 
-  ipcMain.handle(IPC.runReducerNow, async (_, jobId: number) => {
-    await orchestrator.runReducerNow(jobId);
+  // --- Settings ---
+
+  ipcMain.handle(IPC.getSettings, () => loadAppSettings());
+  ipcMain.handle(IPC.setSettings, (_, p: Record<string, unknown>) => {
+    saveAppSettingsPatch(p as never);
     return true;
   });
 
-  ipcMain.handle(IPC.spawnPatchTask, (_, jobId: number, goal: string) => orchestrator.spawnPatchTask(jobId, goal));
-
-  ipcMain.handle(IPC.spawnVerifier, (_, jobId: number, patchTaskId: number) =>
-    orchestrator.spawnVerifierTask(jobId, patchTaskId)
-  );
-
-  ipcMain.handle(IPC.snapshot, (_, jobId: number) => orchestrator.snapshot(jobId));
+  // --- Utility ---
 
   ipcMain.handle(IPC.openPath, (_, p: string) => shell.openPath(p));
 
-  ipcMain.handle(IPC.logsDir, (_, jobId: number) => {
-    const job = orchestrator.listAllJobs().find((j) => j.id === jobId);
-    return job ? repoLogsDir(job.repo_path) : "";
-  });
-
-  ipcMain.handle(IPC.taskLog, (_, jobId: number, taskId: number) => {
-    const job = orchestrator.listAllJobs().find((j) => j.id === jobId);
-    if (!job) return "";
-    return readTaskLog(job.repo_path, jobId, taskId);
+  ipcMain.handle(IPC.logsDir, (_, rootTaskId: number) => {
+    const root = getRootTask(rootTaskId);
+    return root ? repoLogsDir(root.repo_path) : "";
   });
 }
 

@@ -1,16 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isPlannerNode, jobIdFromPlanner } from "./TaskList";
-
-type Task = Record<string, unknown>;
-type Ev = {
-  id: number;
-  level: string;
-  type: string;
-  message: string;
-  data_json: string | null;
-  created_at: string;
-  task_id: number | null;
-};
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function safeJson(s: string): Record<string, any> | null {
@@ -18,42 +6,32 @@ function safeJson(s: string): Record<string, any> | null {
 }
 
 export function TaskDetail({
-  jobId,
+  rootTaskId,
   taskId,
   tick,
 }: {
-  jobId: number | null;
+  rootTaskId: number | null;
   taskId: number | null;
   tick: number;
   onRefresh: () => void;
 }) {
-  const [task, setTask] = useState<Task | null>(null);
-  const [events, setEvents] = useState<Ev[]>([]);
+  const [task, setTask] = useState<ChildTask | null>(null);
+  const [events, setEvents] = useState<TaskEvent[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const isPlannerView = taskId != null && isPlannerNode(taskId);
-  const effectiveJobId = isPlannerView ? jobIdFromPlanner(taskId!) : jobId;
-
   useEffect(() => {
-    if (taskId == null || (!effectiveJobId && !isPlannerView)) {
+    if (taskId == null || !rootTaskId) {
       setTask(null);
       setEvents([]);
       return;
     }
-    if (isPlannerView && effectiveJobId) {
-      setTask({ id: taskId, role: "planner", status: "—" } as Task);
-      void window.grist.getJobLevelEvents(effectiveJobId).then((rows) =>
-        setEvents((rows as Ev[]).reverse()),
-      );
-    } else if (effectiveJobId && taskId != null) {
-      void window.grist.getTasks(effectiveJobId).then((rows) => {
-        setTask((rows as Task[]).find((r) => r.id === taskId) || null);
-      });
-      void window.grist.getTaskEvents(effectiveJobId, taskId).then((rows) =>
-        setEvents((rows as Ev[]).reverse()),
-      );
-    }
-  }, [effectiveJobId, taskId, tick, isPlannerView]);
+    void window.grist.getChildTasks(rootTaskId).then((rows) => {
+      setTask((rows as ChildTask[]).find((r) => r.id === taskId) || null);
+    });
+    void window.grist.getEventsForTask(taskId).then((rows) =>
+      setEvents((rows as TaskEvent[]).reverse()),
+    );
+  }, [rootTaskId, taskId, tick]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -68,34 +46,24 @@ export function TaskDetail({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {/* Thin header */}
       <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-4 py-1.5 text-xs">
-        <span className="font-medium text-white">
-          {isPlannerView ? "Planner" : String(task.role)}
+        <span className="font-medium text-white">{task.role}</span>
+        <StatusPill status={task.status} />
+        <span className="text-muted">
+          {task.steps_used}/{task.max_steps} steps
         </span>
-        {!isPlannerView && (
-          <>
-            <StatusPill status={String(task.status)} />
-            <span className="text-muted">
-              {String(task.steps_used)}/{String(task.max_steps)} steps
-            </span>
-            <span className="text-muted">
-              {String(task.tokens_used)} tok
-            </span>
-          </>
-        )}
-        {effectiveJobId && (
+        <span className="text-muted">{task.tokens_used} tok</span>
+        {rootTaskId && (
           <button
             type="button"
             className="ml-auto text-[10px] text-muted hover:text-white"
-            onClick={() => void window.grist.logsDir(effectiveJobId).then((d) => window.grist.openPath(d))}
+            onClick={() => void window.grist.logsDir(rootTaskId).then((d) => window.grist.openPath(d))}
           >
-            logs ↗
+            logs
           </button>
         )}
       </div>
 
-      {/* Chat-style content */}
       <div className="min-h-0 flex-1 overflow-auto px-4 py-2">
         {steps.length === 0 && <p className="text-xs text-muted">No activity yet.</p>}
         {steps.map((step) => (
@@ -122,11 +90,11 @@ type StepGroup = {
   toolOk: boolean;
   promptData: any;
   rawResponse: string;
-  genericEvents: Ev[];
+  genericEvents: TaskEvent[];
   time: string;
 };
 
-function groupByStep(events: Ev[]): StepGroup[] {
+function groupByStep(events: TaskEvent[]): StepGroup[] {
   const map = new Map<string, StepGroup>();
   const order: string[] = [];
 
@@ -186,7 +154,6 @@ function groupByStep(events: Ev[]): StepGroup[] {
 function StepBlock({ step }: { step: StepGroup }) {
   const [expanded, setExpanded] = useState(false);
 
-  // Pure generic events (planner info, errors, etc.)
   if (!step.reasoning && !step.toolName && step.genericEvents.length > 0) {
     return (
       <>
@@ -197,19 +164,16 @@ function StepBlock({ step }: { step: StepGroup }) {
     );
   }
 
-  // Nothing meaningful
   if (!step.reasoning && !step.toolName) return null;
 
   const toolSummary = step.toolName ? summarizeTool(step.toolName, step.toolArgs, step.toolResult) : "";
 
   return (
     <div className="mb-3">
-      {/* Reasoning — the main "chat message" */}
       {step.reasoning && (
         <p className="text-[13px] leading-relaxed text-gray-200">{step.reasoning}</p>
       )}
 
-      {/* Tool call + result as a single compact line */}
       {step.toolName && (
         <div className="mt-1">
           <button
@@ -275,7 +239,6 @@ function StepBlock({ step }: { step: StepGroup }) {
         </div>
       )}
 
-      {/* Any extra generic events in this step */}
       {step.genericEvents.map((ev) => (
         <GenericLine key={ev.id} ev={ev} />
       ))}
@@ -283,7 +246,7 @@ function StepBlock({ step }: { step: StepGroup }) {
   );
 }
 
-function GenericLine({ ev }: { ev: Ev }) {
+function GenericLine({ ev }: { ev: TaskEvent }) {
   const [expanded, setExpanded] = useState(false);
   const data = ev.data_json ? safeJson(ev.data_json) : null;
   const time = ev.created_at.slice(11, 19);

@@ -101,7 +101,7 @@ export function toolGrepCode(ctx: ToolContext, args: { pattern: string; scopePat
           continue;
         }
         for (const e of ents) {
-          if (e === ".git" || e === "node_modules") continue;
+          if (e === ".git" || e === "node_modules" || e === ".grist" || e === ".venv" || e === "__pycache__") continue;
           const p = join(d, e);
           let st;
           try {

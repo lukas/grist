@@ -1,0 +1,53 @@
+{
+  "providers": [
+    {
+      "id": "claude",
+      "label": "Claude",
+      "type": "anthropic",
+      "models": [
+        { "id": "claude-sonnet-4-20250514", "label": "Sonnet 4", "maxOutput": 16384 },
+        { "id": "claude-opus-4-20250514", "label": "Opus 4", "maxOutput": 16384 },
+        { "id": "claude-3-5-sonnet-20241022", "label": "Sonnet 3.5", "maxOutput": 8192 }
+      ],
+      "defaultModel": "claude-sonnet-4-20250514",
+      "temperature": 0.2,
+      "envKeyPrefix": "GRIST_ANTHROPIC"
+    },
+    {
+      "id": "codex",
+      "label": "OpenAI",
+      "type": "openai",
+      "models": [
+        { "id": "gpt-4.1", "label": "GPT-4.1" },
+        { "id": "gpt-4.1-mini", "label": "GPT-4.1 Mini" },
+        { "id": "gpt-4.1-nano", "label": "GPT-4.1 Nano" },
+        { "id": "o3", "label": "o3" },
+        { "id": "o4-mini", "label": "o4 Mini" }
+      ],
+      "defaultModel": "gpt-4.1",
+      "temperature": 0.2,
+      "envKeyPrefix": "GRIST_OPENAI"
+    },
+    {
+      "id": "kimi",
+      "label": "Kimi",
+      "type": "openai-compatible",
+      "models": [
+        { "id": "moonshotai/Kimi-K2.5", "label": "Kimi K2.5" }
+      ],
+      "defaultModel": "moonshotai/Kimi-K2.5",
+      "temperature": 0.6,
+      "envKeyPrefix": "GRIST_KIMI"
+    },
+    {
+      "id": "mock",
+      "label": "Mock",
+      "type": "mock",
+      "models": [
+        { "id": "mock", "label": "Mock (testing)" }
+      ],
+      "defaultModel": "mock",
+      "temperature": 0
+    }
+  ]
+}

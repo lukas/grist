@@ -80,27 +80,36 @@ function buildPlannerPrompt(goal: string, operatorNotes: string, files: string[]
   const system = `You are a planning agent for Grist, a coding agent supervisor.
 Given a user's goal and the current repo state, decide what tasks to create.
 
-PRIMARY OBJECTIVE: Minimize wall-clock time. Parallelize aggressively where safe.
+PRIMARY OBJECTIVE: Minimize wall-clock time while producing working code.
 
 Task types:
 - "analysis": read-only (list_files, read_file, grep_code, read_git_history). For investigating existing code.
 - "implementation": read+write (write_file, apply_patch, run_command_safe, etc). For creating/modifying code.
 
-PARALLELISM RULES — optimize for wall-clock time:
-- PARALLEL analysis tasks on separate parts of a large codebase (>20 files) — huge win
-- PARALLEL implementation tasks ONLY when they write to entirely different directories/files
-- SEQUENTIAL (depends_on) when one task needs output of another
-- 1 task when repo is empty or small (<20 files), or the goal is a single coherent feature
+CRITICAL RULES FOR EMPTY/NEW REPOS:
+- When the repo is empty or has very few files, use a SINGLE implementation task.
+- Multiple parallel implementation tasks on an empty repo will all start by exploring and then create conflicting files.
+- Only split into multiple tasks when there are EXISTING files to parallelize against.
+
+PARALLELISM RULES for repos with existing code:
+- PARALLEL analysis tasks on separate parts of a large codebase (>20 files)
+- SEQUENTIAL: analysis → implementation (depends_on) when you need to understand before changing
+- PARALLEL implementation tasks ONLY when tasks modify SEPARATE, INDEPENDENT files that don't import each other
+- SEQUENTIAL (depends_on) when one task creates a module that another imports
 
 When to use 1 task:
-- Empty repo → 1 implementation task (nothing to parallelize)
-- Small repo (<20 files) → 1 task
-- Single focused deliverable → 1 task
+- Empty or small repo (< 10 files) — always prefer a single implementation task
+- Single focused deliverable
+- Trivial changes (rename, fix typo, add comment)
+- Project where components import each other (game logic + display = 1 task, not 2)
 
-When to use 2+ parallel tasks:
-- Large repo + goal touches independent subsystems → parallel analysis
-- Multi-part goal with truly independent deliverables writing separate files
+When to use 2+ SEQUENTIAL tasks:
 - "Analyze then fix" → analysis depends_on:[], implementation depends_on:[0]
+- Multi-phase work where phase 2 reads phase 1's output
+
+When to use 2+ PARALLEL tasks:
+- Large repo with truly independent changes to separate files/modules
+- Goal explicitly mentions multiple independent deliverables with no shared imports
 
 Respond ONLY with JSON:
 {
@@ -144,23 +153,12 @@ function parseLLMPlan(text: string): LLMPlan | null {
 }
 
 function fallbackPlan(goal: string, isEmpty: boolean, fileCount: number): LLMPlan {
-  if (isEmpty) {
+  if (isEmpty || fileCount <= 30) {
     return {
-      reasoning: "Empty repo — single implementation task to build the project.",
-      tasks: [{
-        role: "implementer",
-        goal: `Build from scratch: ${goal}`,
-        type: "implementation",
-        max_steps: 30,
-      }],
-    };
-  }
-  if (fileCount <= 30) {
-    return {
-      reasoning: `Small repo (${fileCount} files) — single task can handle analysis and changes.`,
+      reasoning: `${isEmpty ? "Empty" : "Small"} repo — single implementation task.`,
       tasks: [{
         role: "developer",
-        goal: goal,
+        goal,
         type: "implementation",
         max_steps: 30,
       }],
@@ -179,65 +177,34 @@ function validateParallelism(plan: LLMPlan, isEmpty: boolean, fileCount: number)
   const tasks = plan.tasks;
   if (tasks.length <= 1) return plan;
 
-  // Empty repo: never parallelize — there's nothing to read in parallel
-  if (isEmpty) {
-    const implTask = tasks.find((t) => t.type === "implementation") || tasks[0];
-    const combinedGoal = tasks.length > 1
-      ? tasks.map((t) => t.goal).join("; ")
-      : implTask.goal;
-    return {
-      reasoning: `${plan.reasoning} [Consolidated to 1 task — empty repo, parallelism won't help]`,
-      tasks: [{
-        ...implTask,
-        goal: combinedGoal,
-        type: "implementation",
-        max_steps: Math.max(...tasks.map((t) => t.max_steps || 20), 30),
-        depends_on: [],
-      }],
-    };
-  }
-
-  // Small repo (<30 files): collapse parallel tasks of same type into one
-  if (fileCount <= 30) {
-    const hasImpl = tasks.some((t) => t.type === "implementation");
-    const hasAnalysis = tasks.some((t) => t.type === "analysis");
-
-    if (hasImpl && hasAnalysis) {
-      // Keep analyze-then-implement pattern but as 1 each
-      const analysisGoals = tasks.filter((t) => t.type === "analysis").map((t) => t.goal).join("; ");
-      const implGoals = tasks.filter((t) => t.type === "implementation").map((t) => t.goal).join("; ");
+  // On empty or small repos, consolidate parallel impl tasks into one.
+  // Multiple parallel impl tasks on an empty repo just duplicate exploration and create conflicts.
+  if (isEmpty || fileCount < 10) {
+    const implTasks = tasks.filter((t) => t.type === "implementation" && (!t.depends_on || t.depends_on.length === 0));
+    if (implTasks.length > 1) {
+      const mergedGoal = implTasks.map((t) => t.goal).join("; ");
+      const otherTasks = tasks.filter((t) => t.type !== "implementation" || (t.depends_on && t.depends_on.length > 0));
       return {
-        reasoning: `${plan.reasoning} [Consolidated — small repo (${fileCount} files), parallel scans unnecessary]`,
+        reasoning: `${plan.reasoning} [Merged ${implTasks.length} parallel impl tasks into 1 — repo is ${isEmpty ? "empty" : "small"}]`,
         tasks: [
-          { role: "analyzer", goal: analysisGoals, type: "analysis", max_steps: 20 },
-          { role: "implementer", goal: implGoals, type: "implementation", max_steps: 30, depends_on: [0] },
+          ...otherTasks,
+          {
+            role: "developer",
+            goal: mergedGoal,
+            type: "implementation",
+            max_steps: 30,
+            depends_on: otherTasks.length > 0 ? [0] : undefined,
+          },
         ],
       };
     }
-    // All same type — merge into one
-    const combined = tasks.map((t) => t.goal).join("; ");
-    const type = hasImpl ? "implementation" as const : "analysis" as const;
-    return {
-      reasoning: `${plan.reasoning} [Consolidated — small repo (${fileCount} files)]`,
-      tasks: [{ role: tasks[0].role, goal: combined, type, max_steps: 30 }],
-    };
   }
 
-  // Larger repos: collapse parallel implementation tasks (they'll conflict writing to the same files)
-  const parallelImpl = tasks.filter((t) => t.type === "implementation" && (!t.depends_on || t.depends_on.length === 0));
-  if (parallelImpl.length > 1) {
-    const implGoal = parallelImpl.map((t) => t.goal).join("; ");
-    const otherTasks = tasks.filter((t) => !(t.type === "implementation" && (!t.depends_on || t.depends_on.length === 0)));
-    const mergedImpl = {
-      role: "implementer",
-      goal: implGoal,
-      type: "implementation" as const,
-      max_steps: Math.max(...parallelImpl.map((t) => t.max_steps || 20), 30),
-      depends_on: otherTasks.length > 0 ? otherTasks.map((_, i) => i) : [] as number[],
-    };
+  // Cap at 6 parallel tasks to avoid resource exhaustion
+  if (tasks.length > 6) {
     return {
-      reasoning: `${plan.reasoning} [Merged ${parallelImpl.length} parallel impl tasks — parallel writes conflict]`,
-      tasks: [...otherTasks, mergedImpl],
+      reasoning: `${plan.reasoning} [Capped from ${tasks.length} to 6 tasks]`,
+      tasks: tasks.slice(0, 6),
     };
   }
 
