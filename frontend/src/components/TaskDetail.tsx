@@ -320,9 +320,9 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
 
   if (ev.type === "user_message") {
     return (
-      <div className="my-1.5 flex items-start gap-2 rounded border border-violet-500/30 bg-violet-900/15 px-3 py-2">
-        <span className="text-xs font-medium text-violet-300">You:</span>
-        <span className="flex-1 text-xs text-violet-100">{ev.message}</span>
+      <div className="my-1.5 flex items-start gap-2 rounded border border-border/40 bg-white/[0.03] px-3 py-2">
+        <span className="text-xs font-medium text-gray-400">You</span>
+        <span className="flex-1 text-xs text-gray-200">{ev.message}</span>
         <span className="shrink-0 text-[10px] text-gray-600">{time}</span>
       </div>
     );

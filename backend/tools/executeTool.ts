@@ -18,6 +18,7 @@ import {
 } from "./patchTools.js";
 import { toolEmitProgress, toolPauseSelf } from "./controlTools.js";
 import { toolWriteMemory, toolReadMemory } from "./memoryTools.js";
+import { toolListSkills, toolReadSkill } from "./skillTools.js";
 
 export async function executeTool(
   name: string,
@@ -74,6 +75,10 @@ export async function executeTool(
       return toolWriteMemory(ctx, args as { content: string; scope?: string; title?: string });
     case "read_memory":
       return toolReadMemory(ctx, args as { scope?: string; file?: string });
+    case "list_skills":
+      return toolListSkills(ctx, args as { scope?: "visible" | "global" | "project" | "all" });
+    case "read_skill":
+      return toolReadSkill(ctx, args as { skillId: string; scope?: "global" | "project"; file?: string });
     default:
       return { ok: false, error: `Unknown tool: ${name}` };
   }
@@ -102,4 +107,6 @@ export const ALL_TOOL_NAMES = [
   "pause_self",
   "write_memory",
   "read_memory",
+  "list_skills",
+  "read_skill",
 ] as const;

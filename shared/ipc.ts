@@ -29,6 +29,10 @@ export const IPC = {
   getMemory: "grist:getMemory",
   getMemoryFile: "grist:getMemoryFile",
   updateMemorySummary: "grist:updateMemorySummary",
+  getSkillsCatalog: "grist:getSkillsCatalog",
+  installSkill: "grist:installSkill",
+  removeSkill: "grist:removeSkill",
+  readSkill: "grist:readSkill",
 
   // Utility
   openPath: "grist:openPath",

@@ -10,6 +10,7 @@ import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { IPC } from "../shared/ipc.js";
 import { getSetting, setSetting, loadAppSettings, saveAppSettingsPatch } from "../backend/settings/appSettings.js";
 import { getFullMemoryData, readHomeMemoryFile, readRepoMemoryFile, writeHomeSummary, writeRepoSummary } from "../backend/memory/memoryManager.js";
+import { getSkillCatalog, installSkill, readInstalledSkill, removeSkill } from "../backend/skills/skillManager.js";
 import { createRootTask, listRootTasks, getRootTask, rootTaskToJobId, getChildTasks } from "../backend/db/rootTaskFacade.js";
 import { insertEvent, listEventsByTaskId, listEvents } from "../backend/db/eventRepo.js";
 import { getTask } from "../backend/db/taskRepo.js";
@@ -236,6 +237,20 @@ function registerIpc(): void {
     if (payload.repoPath) { writeRepoSummary(payload.repoPath, payload.content); return true; }
     return false;
   });
+
+  ipcMain.handle(IPC.getSkillsCatalog, (_, repoPath?: string) => {
+    try { return getSkillCatalog(repoPath); }
+    catch (e) { console.error("[getSkillsCatalog]", e); return { available: [], installedGlobal: [], installedProject: [] }; }
+  });
+  ipcMain.handle(IPC.installSkill, (_, payload: { skillOrUrl: string; scope?: "global" | "project"; repoPath?: string }) =>
+    installSkill(payload)
+  );
+  ipcMain.handle(IPC.removeSkill, (_, payload: { skillId: string; scope: "global" | "project"; repoPath?: string }) =>
+    removeSkill(payload.skillId, payload.scope, payload.repoPath)
+  );
+  ipcMain.handle(IPC.readSkill, (_, payload: { skillId: string; scope?: "global" | "project"; repoPath?: string; file?: string }) =>
+    readInstalledSkill(payload.skillId, payload)
+  );
 
   // --- Utility ---
 

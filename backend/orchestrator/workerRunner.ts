@@ -14,6 +14,7 @@ import { appendTaskLog } from "../logging/taskLogger.js";
 import { execSync } from "node:child_process";
 import { ensureHomeMemory, ensureRepoMemory, collectMemoryContext } from "../memory/memoryManager.js";
 import { runReflection } from "./reflection.js";
+import { buildSkillIndex } from "../skills/skillManager.js";
 
 /* ─── Three-tier context compaction (inspired by Claude Code + OpenHands) ─── */
 
@@ -280,6 +281,7 @@ export async function runTaskWorker(
     const stepNum = task.steps_used + 1;
     const allowed = JSON.parse(task.allowed_tools_json) as string[];
     const canWrite = allowed.includes("write_file");
+    const skillContext = buildSkillIndex(repoPath);
     const sys = `You are a Grist coding agent. Task role: ${task.role}. Step ${stepNum} of max ${task.max_steps}.
 OPTIMIZE FOR SPEED: minimize wall-clock time by running independent tools in parallel.
 
@@ -290,6 +292,10 @@ ${canWrite ? `Tool reference:
 - read_file: {"path": "relative/path.ext"} — read a file
 - grep_code: {"pattern": "regex"} — search code
 - run_command_safe: {"command": "npm install"} — run a shell command
+` : ""}
+${allowed.includes("read_skill") ? `Skill reference:
+- list_skills: {"scope":"visible"} — list installed skills for this repo
+- read_skill: {"skillId":"frontend-debugger"} — load a skill before following it
 ` : ""}
 Respond with JSON. You have two options:
 
@@ -303,7 +309,8 @@ IMPORTANT:
 - Do NOT parallelize tools that depend on each other (e.g. read then write based on read).
 - Call write_memory when you discover something notable (architecture decisions, gotchas, conventions). Don't wait until the end.
 - After writing code, test it with run_command_safe when possible.
-- When done, use {"decision":"finish", "reasoning_summary":"what was accomplished"}.`;
+- When done, use {"decision":"finish", "reasoning_summary":"what was accomplished"}.
+${skillContext ? `\n\n${skillContext}` : ""}`;
 
     const compacted = await compactHistory(history, provider, emit);
     // Replace history in-place when summarization reduced it

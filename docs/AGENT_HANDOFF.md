@@ -23,8 +23,11 @@ npm run test:electron-smoke   # build + Electron-only check for window.grist
 
 - **DB:** `app.getPath('userData')/grist.sqlite`
 - **Logs:** `<repo>/.grist/logs/job-N/task-N.jsonl`
+- **Global skills:** `~/.grist/skills/<skill-id>/SKILL.md`
+- **Project skills:** `<repo>/.grist/skills/<skill-id>/SKILL.md`
 - **Scratch/worktrees:** `userData/workspace/jobs/<jobId>/…`
 - **Schema file:** copied to `dist-electron/schema.sql` on electron build
+- **Bundled skills:** copied to `dist-electron/bundled-skills/`; source lives in `bundled-skills/`
 
 ## Architecture map
 
@@ -52,8 +55,9 @@ Everything is a **task**. The old "jobs" table is kept internally but hidden beh
 | Providers | `backend/providers/*` + `providerFactory.ts` |
 | Tools | `backend/tools/executeTool.ts`, `memoryTools.ts`, `controlTools.ts` |
 | Memory | `backend/memory/memoryManager.ts` — `~/.grist/` (global) + `<repo>/.grist/` (project) |
+| Skills | `backend/skills/skillManager.ts`, `backend/tools/skillTools.ts`, `cli/skillsCliCore.ts` |
 | Reflection | `backend/orchestrator/reflection.ts` — async post-task learning distillation |
-| React UI | `frontend/src/App.tsx`, `frontend/src/components/*` (incl. `MemoryDrawer`, `MemoryViewer`) |
+| React UI | `frontend/src/App.tsx`, `frontend/src/components/*` (incl. `MemoryDrawer`, `MemoryViewer`, `SkillsModal`) |
 
 ### Frontend → IPC API
 
@@ -72,15 +76,20 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 | `rootTaskControl` | Pause/resume/stop a root task |
 | `taskControl` | Pause/stop/redirect/fork individual tasks |
 | `sendTaskMessage` | Inject operator message into a running task's event stream |
+| `getSkillsCatalog` | List bundled + installed skills |
+| `installSkill` | Install a skill into global or project scope |
+| `removeSkill` | Remove an installed skill |
+| `readSkill` | Read installed skill contents |
 
 ### Frontend components
 
 | Component | Behavior |
 |-----------|----------|
 | `App.tsx` | State: `rootTaskId`, `selectedTaskId`. Uses `createTask`/`startTask` to run. |
-| `MissionControl` | Header bar. Repo picker, provider dot, pause/resume/stop via `rootTaskControl`. |
+| `MissionControl` | Header bar. Repo picker, provider dot, Skills button, pause/resume/stop via `rootTaskControl`. |
 | `TaskList` | Left sidebar. Root tasks as expandable nodes, child tasks as tree. Filters out `root`/`planner` kinds. |
 | `TaskDetail` | Main panel. Chat-style event view with operator message input. Loads events via `getEventsForTask(taskId)`. |
+| `SkillsModal` | Browse bundled skills, install/remove global + project skills. |
 
 ## Contracts / invariants
 
@@ -94,6 +103,7 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
   - **Tier 2 — LLM summarization** (conditional): when history exceeds 30 entries AND 120K chars, summarize old entries via same provider into a single context summary. Recent 10 entries kept in full.
   - **Tier 3 — Token-budget-aware**: triggers based on estimated token count. Compaction events emitted so UI can show when compaction occurs.
   - History is replaced in-place after summarization so subsequent steps use the compact version.
+- **Skill system** — skills are declarative instruction packs, not executable plugins. Bundled skills live in `bundled-skills/`; installs copy them to `~/.grist/skills/` or `<repo>/.grist/skills/`. The worker prompt includes a compact installed-skill index from `buildSkillIndex()`, and tasks can explicitly call `list_skills` / `read_skill` to load full instructions. Project skills override same-id global skills for visibility.
 
 ## Provider env / settings
 
@@ -105,7 +115,7 @@ SQLite `settings` table **or** repo-root **`.env`** (gitignored). `loadAppSettin
 node dist-electron/grist-cli.js <command>
 ```
 
-Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `summary`, `watch`, `pause`/`resume`/`stop`. All take root task IDs.
+Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `summary`, `watch`, `pause`/`resume`/`stop`, plus `skills ...` for skill management. `cli/skills-cli.ts` builds a standalone `skills` entrypoint.
 
 ## Known gaps
 
@@ -121,7 +131,8 @@ Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `s
 | 2026-04-06 | Initial v0: Electron+Vite+React+Tailwind, SQLite, planner/scheduler/worker, tools, IPC UI. |
 | 2026-04-08 | Unified task model: root task facade, planner as real task. |
 | 2026-04-08 | Bug fixes: retry on model errors, stall dedup, job status reflects failed tasks, maxTokens 8K→16K. |
-| 2026-04-08 | Frontend fully wired to unified task API. Removed all `jobId` references from renderer. Deleted orphaned components (EventStream, PatchComparison, GlobalFindings, MemoryDrawer, MemoryViewer, SkillsModal). |
+| 2026-04-08 | Frontend fully wired to unified task API. Removed all `jobId` references from renderer. Deleted orphaned components (EventStream, PatchComparison, GlobalFindings). |
 | 2026-04-08 | Operator messaging: `sendTaskMessage` IPC inserts `user_message` events; `workerRunner` injects them into LLM history; `TaskDetail` shows chat input + styled message bubbles. |
 | 2026-04-08 | Three-tier context compaction: Tier 1 observation masking (always), Tier 2 LLM summarization (>30 entries + >120K chars), Tier 3 token-budget-aware triggers. Token budgets 200K/100K. Budget messages show model/usage detail. Settings: DB overrides .env. |
 | 2026-04-08 | Robustness: Planner prefers parallel tasks for greenfield (architect + fan-out with scope.files). max_steps→done when files written. depsSatisfied accepts done/completed/failed/stopped. Memory tools wired into executeTool. Git diff includes untracked files. Allowlist expanded + supports wrapper commands. Memory prompting during work. |
+| 2026-04-08 | Restored skill system after unified-task refactor: runtime `list_skills` / `read_skill`, skill index in worker prompt, Skills modal in the header, IPC handlers, bundled-skill copying during build, and CLI `skills` entrypoints. |

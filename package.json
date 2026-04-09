@@ -5,17 +5,23 @@
   "private": true,
   "type": "module",
   "main": "dist-electron/main.js",
+  "bin": {
+    "grist": "dist-electron/grist-cli.js",
+    "skills": "dist-electron/skills-cli.js"
+  },
   "scripts": {
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
     "dev": "concurrently -k \"vite --config frontend/vite.config.ts\" \"wait-on tcp:5173 && npm run build:electron && npm run rebuild:electron && GRIST_DEV_SERVER=1 electron .\"",
     "build:electron": "node scripts/build-electron.mjs",
     "build": "npm run build:electron && npx vite build --config frontend/vite.config.ts",
     "start": "npm run rebuild:electron && electron .",
+    "build:cli": "npm run build:electron && rm -rf node_modules/better-sqlite3/build/node_gyp_bins && npm rebuild better-sqlite3",
     "pretest": "npm rebuild better-sqlite3",
     "test": "vitest run",
     "test:electron-smoke": "npm run build:electron && npx electron electron/smoke.cjs",
     "test:watch": "npm rebuild better-sqlite3 && vitest",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "cli:skills": "node dist-electron/skills-cli.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",

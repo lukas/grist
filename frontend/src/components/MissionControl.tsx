@@ -8,6 +8,7 @@ type Props = {
   onSelectRepo: (repo: string) => void;
   onPickRepo: () => void;
   onOpenSettings: () => void;
+  onOpenSkills: () => void;
   memoryOpen: boolean;
   onToggleMemory: () => void;
 };
@@ -27,6 +28,7 @@ export function MissionControl({
   onSelectRepo,
   onPickRepo,
   onOpenSettings,
+  onOpenSkills,
   memoryOpen,
   onToggleMemory,
 }: Props) {
@@ -133,6 +135,14 @@ export function MissionControl({
       >
         <span className={`inline-block h-1.5 w-1.5 rounded-full ${PROVIDER_DOT[provider] ?? "bg-gray-500"}`} />
         {provider || "provider"}
+      </button>
+
+      <button
+        type="button"
+        className="rounded px-1.5 py-0.5 text-muted hover:bg-white/5 hover:text-white"
+        onClick={onOpenSkills}
+      >
+        Skills
       </button>
 
       <button

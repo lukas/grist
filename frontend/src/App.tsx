@@ -4,6 +4,7 @@ import { TaskList } from "./components/TaskList";
 import { TaskDetail } from "./components/TaskDetail";
 import { NewTaskForm } from "./components/NewTaskForm";
 import { SettingsModal } from "./components/SettingsModal";
+import { SkillsModal } from "./components/SkillsModal";
 import { RepoDialog } from "./components/RepoDialog";
 import { AutoPauseBanner } from "./components/AutoPauseBanner";
 import { MemoryDrawer } from "./components/MemoryDrawer";
@@ -15,6 +16,7 @@ export default function App() {
   const [tick, setTick] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [repoDialogOpen, setRepoDialogOpen] = useState(false);
   const [provider, setProvider] = useState("");
   const [pauseWarnings, setPauseWarnings] = useState<{ taskId: number; message: string }[]>([]);
@@ -130,7 +132,7 @@ export default function App() {
     setMemorySel(null);
   };
 
-  const selectTask = (id: number) => {
+  const selectTask = (id: number | null) => {
     setSelectedTaskId(id);
     setMemorySel(null);
   };
@@ -152,6 +154,7 @@ export default function App() {
         onSelectRepo={switchRepo}
         onPickRepo={openRepoDialog}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSkills={() => setSkillsOpen(true)}
         memoryOpen={memoryOpen}
         onToggleMemory={() => setMemoryOpen((v) => !v)}
       />
@@ -191,6 +194,7 @@ export default function App() {
         )}
       </div>
       {settingsOpen && <SettingsModal onClose={() => { setSettingsOpen(false); loadProvider(); }} />}
+      {skillsOpen && <SkillsModal repo={repo} onClose={() => setSkillsOpen(false)} />}
       {repoDialogOpen && (
         <RepoDialog
           onSelect={onRepoSelected}

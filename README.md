@@ -10,6 +10,7 @@ cp .env.example .env   # optional: local secrets (gitignored)
 npm test               # vitest + preload bundle + Electron smoke on macOS
 npm run dev            # UI: http://localhost:5173 + Electron window
 npm run build          # production: dist-electron/ + dist-frontend/
+npm run build:cli      # build CLI artifacts for system Node
 ```
 
 `npm run dev` runs `electron-rebuild` for **better-sqlite3** (native addon must match Electron's Node ABI). Default provider is **mock** (no API keys needed).
@@ -46,6 +47,9 @@ The frontend uses a unified task API (no "job" concept exposed):
 | `getEventsForTask` | Get events for any task |
 | `rootTaskControl` | Pause/resume/stop a root task |
 | `sendTaskMessage` | Send a message to a running task's agent |
+| `getSkillsCatalog` | List bundled + installed skills |
+| `installSkill` | Install a skill globally or for the current repo |
+| `removeSkill` | Remove an installed skill |
 
 ## CLI
 
@@ -54,7 +58,20 @@ node dist-electron/grist-cli.js run --repo /path/to/repo --goal "your goal"
 node dist-electron/grist-cli.js list            # list all root tasks
 node dist-electron/grist-cli.js status <taskId>  # task + subtask statuses
 node dist-electron/grist-cli.js watch <taskId>   # live tail events
+node dist-electron/grist-cli.js skills available
+node dist-electron/skills-cli.js list --scope global
 ```
+
+## Skills
+
+Grist supports Claude/Cursor-style skill packs:
+
+- Bundled skills ship in `bundled-skills/`
+- Global installs live in `~/.grist/skills/<skill-id>/`
+- Project installs live in `<repo>/.grist/skills/<skill-id>/`
+- Skills are Markdown packs centered on `SKILL.md` frontmatter, not executable plugins
+
+Installed skills become visible to workers through the read-only tools `list_skills` and `read_skill`. The app exposes a **Skills** modal in the top bar for browsing bundled skills and installing/removing them by scope.
 
 ## Recent improvements
 
@@ -63,6 +80,7 @@ node dist-electron/grist-cli.js watch <taskId>   # live tail events
 - **Git diff captures new files**: Uses `git add -A` + `--cached` diff to include untracked files
 - **Expanded allowlist**: Common dev commands (npm, node, python, git, curl, etc.) + wrapper support (timeout, pipes)
 - **Memory system**: `write_memory`/`read_memory` tools + async post-task reflection
+- **Skill system**: bundled/global/project skill packs, top-bar Skills modal, CLI `skills` entrypoint, runtime `list_skills` / `read_skill`
 - **Compaction preserves file list**: "Files written" entry survives context compaction
 
 ## Spec

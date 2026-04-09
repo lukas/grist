@@ -64,6 +64,29 @@ declare global {
     name: string;
   }
 
+  interface SkillSummary {
+    id: string;
+    name: string;
+    description: string;
+    scope: "bundled" | "global" | "project";
+    references: string[];
+  }
+
+  interface SkillCatalogEntry {
+    id: string;
+    name: string;
+    description: string;
+    source: "bundled" | "local" | "url";
+    sourceValue: string;
+    installedScopes: ("global" | "project")[];
+  }
+
+  interface SkillCatalogView {
+    available: SkillCatalogEntry[];
+    installedGlobal: SkillSummary[];
+    installedProject: SkillSummary[];
+  }
+
   interface Window {
     grist: {
       ping(): Promise<string>;
@@ -91,6 +114,10 @@ declare global {
       getMemory(repoPath: string): Promise<MemoryData>;
       getMemoryFile(p: { scope: string; name: string; repoPath?: string }): Promise<string>;
       updateMemorySummary(p: { scope: string; content: string; repoPath?: string }): Promise<boolean>;
+      getSkillsCatalog(repoPath?: string): Promise<SkillCatalogView>;
+      installSkill(p: { skillOrUrl: string; scope?: "global" | "project"; repoPath?: string }): Promise<SkillSummary>;
+      removeSkill(p: { skillId: string; scope: "global" | "project"; repoPath?: string }): Promise<boolean>;
+      readSkill(p: { skillId: string; scope?: "global" | "project"; repoPath?: string; file?: string }): Promise<SkillSummary & { content?: string; body?: string }>;
 
       openPath(p: string): Promise<string>;
       logsDir(rootTaskId: number): Promise<string>;

@@ -1,7 +1,7 @@
 import * as esbuild from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { copyFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, unlinkSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -39,6 +39,12 @@ await esbuild.build({
   outfile: join(root, "dist-electron/grist-cli.js"),
 });
 
+await esbuild.build({
+  ...common,
+  entryPoints: [join(root, "cli/skills-cli.ts")],
+  outfile: join(root, "dist-electron/skills-cli.js"),
+});
+
 copyFileSync(join(root, "backend/db/schema.sql"), join(root, "dist-electron/schema.sql"));
 
 const assetsOut = join(root, "dist-electron/../assets");
@@ -47,6 +53,12 @@ const iconSrc = join(root, "assets/icon.png");
 if (existsSync(iconSrc)) copyFileSync(iconSrc, join(assetsOut, "icon.png"));
 const icnsSrc = join(root, "assets/icon.icns");
 if (existsSync(icnsSrc)) copyFileSync(icnsSrc, join(assetsOut, "icon.icns"));
+
+const bundledSkillsSrc = join(root, "bundled-skills");
+const bundledSkillsOut = join(root, "dist-electron", "bundled-skills");
+if (existsSync(bundledSkillsSrc)) {
+  cpSync(bundledSkillsSrc, bundledSkillsOut, { recursive: true });
+}
 
 for (const stale of ["preload.js", "preload.js.map"]) {
   try {
