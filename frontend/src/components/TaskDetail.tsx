@@ -233,7 +233,7 @@ function StepBlock({ step }: { step: StepGroup }) {
     <div className="mb-3">
       {step.reasoning && (
         <div className="flex items-start gap-2">
-          <p className="flex-1 text-[13px] leading-relaxed text-gray-200">{step.reasoning}</p>
+          <p className="flex-1 text-[11px] leading-relaxed text-gray-500">{step.reasoning}</p>
           <span className="shrink-0 pt-0.5 text-[10px] text-gray-600">{step.time}</span>
         </div>
       )}
@@ -242,13 +242,13 @@ function StepBlock({ step }: { step: StepGroup }) {
         <div className="mt-1">
           <button
             type="button"
-            className="group flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs hover:bg-white/5"
+            className="group flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left text-[11px] hover:bg-white/5"
             onClick={() => setExpanded(!expanded)}
           >
             <span className={step.toolOk ? "text-emerald-400" : "text-red-400"}>
               {step.toolOk ? "✓" : "✗"}
             </span>
-            <span className="font-mono text-gray-400">{step.toolName}</span>
+            <span className="font-mono text-gray-500">{step.toolName}</span>
             {toolSummary && (
               <span className="truncate text-muted">{toolSummary}</span>
             )}
@@ -321,8 +321,7 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
   if (ev.type === "user_message") {
     return (
       <div className="my-1.5 flex items-start gap-2 rounded border border-border/40 bg-white/[0.03] px-3 py-2">
-        <span className="text-xs font-medium text-gray-400">You</span>
-        <span className="flex-1 text-xs text-gray-200">{ev.message}</span>
+        <span className="flex-1 text-sm text-gray-200">{ev.message}</span>
         <span className="shrink-0 text-[10px] text-gray-600">{time}</span>
       </div>
     );

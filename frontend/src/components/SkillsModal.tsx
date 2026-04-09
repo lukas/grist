@@ -49,7 +49,7 @@ export function SkillsModal({ repo, onClose }: { repo: string; onClose: () => vo
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
-        className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg border border-border bg-panel p-5 shadow-xl"
+        className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg border border-border/80 bg-[#1a2233] p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">

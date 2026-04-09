@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { MissionControl } from "./components/MissionControl";
 import { TaskList } from "./components/TaskList";
 import { TaskDetail } from "./components/TaskDetail";
@@ -9,6 +9,34 @@ import { RepoDialog } from "./components/RepoDialog";
 import { AutoPauseBanner } from "./components/AutoPauseBanner";
 import { MemoryDrawer } from "./components/MemoryDrawer";
 import { MemoryViewer } from "./components/MemoryViewer";
+
+class ModalErrorBoundary extends React.Component<
+  { fallback: string; children: React.ReactNode },
+  { error: string | null }
+> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(e: Error) { return { error: e.message }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="rounded-lg border border-red-800 bg-[#1a2233] p-6 text-sm text-red-300">
+            <p className="font-medium">{this.props.fallback} crashed:</p>
+            <pre className="mt-2 text-xs text-red-400">{this.state.error}</pre>
+            <button
+              type="button"
+              className="mt-3 rounded border border-border px-3 py-1 text-white"
+              onClick={() => this.setState({ error: null })}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const [repo, setRepo] = useState("");
@@ -194,7 +222,11 @@ export default function App() {
         )}
       </div>
       {settingsOpen && <SettingsModal onClose={() => { setSettingsOpen(false); loadProvider(); }} />}
-      {skillsOpen && <SkillsModal repo={repo} onClose={() => setSkillsOpen(false)} />}
+      {skillsOpen && (
+        <ModalErrorBoundary fallback="Skills">
+          <SkillsModal repo={repo} onClose={() => setSkillsOpen(false)} />
+        </ModalErrorBoundary>
+      )}
       {repoDialogOpen && (
         <RepoDialog
           onSelect={onRepoSelected}

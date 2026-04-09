@@ -42,6 +42,15 @@ const api = {
   updateMemorySummary: (payload: { scope: string; content: string; repoPath?: string }) =>
     ipcRenderer.invoke(IPC.updateMemorySummary, payload) as Promise<boolean>,
 
+  getSkillsCatalog: (repoPath?: string) =>
+    ipcRenderer.invoke(IPC.getSkillsCatalog, repoPath) as Promise<unknown>,
+  installSkill: (payload: { skillOrUrl: string; scope?: "global" | "project"; repoPath?: string }) =>
+    ipcRenderer.invoke(IPC.installSkill, payload) as Promise<unknown>,
+  removeSkill: (payload: { skillId: string; scope: "global" | "project"; repoPath?: string }) =>
+    ipcRenderer.invoke(IPC.removeSkill, payload) as Promise<boolean>,
+  readSkill: (payload: { skillId: string; scope?: "global" | "project"; repoPath?: string; file?: string }) =>
+    ipcRenderer.invoke(IPC.readSkill, payload) as Promise<unknown>,
+
   openPath: (p: string) => ipcRenderer.invoke(IPC.openPath, p) as Promise<string>,
   logsDir: (rootTaskId: number) => ipcRenderer.invoke(IPC.logsDir, rootTaskId) as Promise<string>,
 

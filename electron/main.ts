@@ -13,7 +13,8 @@ import { getFullMemoryData, readHomeMemoryFile, readRepoMemoryFile, writeHomeSum
 import { getSkillCatalog, installSkill, readInstalledSkill, removeSkill } from "../backend/skills/skillManager.js";
 import { createRootTask, listRootTasks, getRootTask, rootTaskToJobId, getChildTasks } from "../backend/db/rootTaskFacade.js";
 import { insertEvent, listEventsByTaskId, listEvents } from "../backend/db/eventRepo.js";
-import { getTask } from "../backend/db/taskRepo.js";
+import { getTask, updateTask, listTasksForJob } from "../backend/db/taskRepo.js";
+import { getJob, updateJob, listJobs } from "../backend/db/jobRepo.js";
 import type { TaskControlAction, RootTaskControlAction } from "../shared/ipc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -59,9 +60,11 @@ function createWindow(): void {
 
   if (isDev && process.env.GRIST_DEV_SERVER === "1") {
     mainWindow.loadURL("http://localhost:5173");
-    mainWindow.webContents.openDevTools({ mode: "detach" });
-  } else {
+  }  else {
     mainWindow.loadFile(join(__dirname, "../dist-frontend/index.html"));
+  }
+  if (process.env.GRIST_DEVTOOLS === "1") {
+    mainWindow.webContents.openDevTools({ mode: "detach" });
   }
 
   mainWindow.on("closed", () => {
@@ -197,6 +200,19 @@ function registerIpc(): void {
       type: "user_message",
       message: payload.message,
     });
+    const terminal = ["done", "failed", "stopped", "paused"];
+    if (terminal.includes(task.status)) {
+      updateTask(payload.taskId, { status: "queued", blocker: "" });
+      const job = getJob(task.job_id);
+      console.log(`[sendTaskMessage] task ${payload.taskId} was ${task.status}, job ${task.job_id} is ${job?.status}`);
+      if (job && !["running", "paused"].includes(job.status)) {
+        updateJob(task.job_id, { status: "running" });
+        console.log(`[sendTaskMessage] set job ${task.job_id} to running`);
+      }
+      orchestrator.stopScheduler(task.job_id);
+      orchestrator.startScheduler(task.job_id);
+      console.log(`[sendTaskMessage] scheduler restarted for job ${task.job_id}`);
+    }
     return true;
   });
 
@@ -278,6 +294,18 @@ app.whenReady().then(() => {
 
   registerIpc();
   createWindow();
+
+  // Resume schedulers for any jobs with active tasks
+  const activeStatuses = new Set(["queued", "ready", "running", "blocked"]);
+  for (const job of listJobs()) {
+    if (["running", "paused"].includes(job.status)) {
+      const tasks = listTasksForJob(job.id);
+      if (tasks.some((t) => activeStatuses.has(t.status))) {
+        console.log(`[startup] resuming scheduler for job ${job.id} (${job.status})`);
+        orchestrator.startScheduler(job.id);
+      }
+    }
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
