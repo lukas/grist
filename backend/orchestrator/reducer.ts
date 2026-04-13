@@ -14,17 +14,25 @@ export async function runReducerPass(task: TaskRow): Promise<void> {
   const settings = loadAppSettings();
   const provider = createProvider(task.assigned_model_provider, settings);
   const artifacts = listArtifactsForJob(task.job_id) as { type: string; content_json: string }[];
-  const findings = artifacts.filter((a) => a.type === "findings_report").map((a) => JSON.parse(a.content_json));
-
-  const prompt = `You are the reducer. Job goal: ${job.user_goal}
+  const prompt = `You are the summarizer worker. Job goal: ${job.user_goal}
 Operator notes: ${job.operator_notes || "(none)"}
 
-Findings artifacts:
-${JSON.stringify(findings, null, 2).slice(0, 120_000)}
+Worker artifacts:
+${JSON.stringify(artifacts.map((a) => ({ type: a.type, content: JSON.parse(a.content_json) })), null, 2).slice(0, 120_000)}
 
-Return JSON with keys: confirmed_facts (string[]), top_hypotheses (string[]), contradictions (string[]), recommended_next_tasks (string[]), overall_confidence (number 0-1), summary_text (string), recommendation one of: no_more_work | spawn_patch | verification_required | replan_required`;
+Return JSON with keys:
+- confirmed_facts (string[])
+- top_hypotheses (string[])
+- contradictions (string[])
+- recommended_next_tasks (string[])
+- open_questions (string[])
+- handoff_notes (string[])
+- overall_confidence (number 0-1)
+- summary_text (string)
+- final_summary (string)
+- recommendation one of: no_more_work | spawn_patch | verification_required | replan_required`;
 
-  const sys = "You output only valid JSON for the reducer schema.";
+  const sys = "You output only valid JSON for the summarizer schema.";
   const resp = await provider.generateText({
     systemPrompt: sys,
     userPrompt: prompt,
@@ -35,7 +43,7 @@ Return JSON with keys: confirmed_facts (string[]), top_hypotheses (string[]), co
   insertArtifact({
     job_id: task.job_id,
     task_id: task.id,
-    type: "reducer_summary",
+    type: "final_summary",
     content_json: JSON.stringify(parsed),
     confidence: parsed.overall_confidence,
   });
@@ -45,14 +53,14 @@ Return JSON with keys: confirmed_facts (string[]), top_hypotheses (string[]), co
     current_action: "reducer_complete",
     next_action: "",
     confidence: parsed.overall_confidence,
-    findings_json: JSON.stringify(parsed.top_hypotheses),
+    findings_json: JSON.stringify(parsed.confirmed_facts),
   });
   insertEvent({
     job_id: task.job_id,
     task_id: task.id,
     level: "info",
     type: "reducer_done",
-    message: parsed.summary_text.slice(0, 500),
+    message: (parsed.final_summary || parsed.summary_text).slice(0, 500),
     data_json: JSON.stringify({ recommendation: parsed.recommendation }),
   });
 }

@@ -12,11 +12,37 @@ import { runReducerPass } from "./reducer.js";
 import { createWorktree } from "../workspace/worktreeManager.js";
 import { defaultWorktreePath, scratchpadPath } from "../workspace/pathUtils.js";
 import { ensureScratchpad } from "../workspace/scratchpadManager.js";
+import {
+  parseTaskRuntime,
+  startBestEffortTaskRuntime,
+  stopTaskRuntime,
+  stringifyTaskRuntime,
+} from "../runtime/taskRuntime.js";
+import { ensureGitRepo, ensureHeadCommit, defaultBranchName } from "../workspace/gitRepoManager.js";
 import { ALL_TOOL_NAMES } from "../tools/executeTool.js";
 import type { TaskControlAction, JobControlAction } from "../../shared/ipc.js";
 import type { ModelProviderName } from "../types/models.js";
 
-const PATCH_TOOLS = ALL_TOOL_NAMES.filter((n) => n !== "remove_worktree");
+const PATCH_TOOLS = ALL_TOOL_NAMES.filter((n) => !["remove_worktree", "create_worktree"].includes(n));
+
+const MIN_RESUME_STEP_BUMP = 5;
+const MIN_RESUME_TOKEN_BUMP = 50_000;
+
+export function explicitResumeBudgetPatch(task: { max_steps: number; max_tokens: number }): {
+  max_steps: number;
+  max_tokens: number;
+  stepBump: number;
+  tokenBump: number;
+} {
+  const stepBump = Math.max(MIN_RESUME_STEP_BUMP, Math.ceil(task.max_steps * 0.25));
+  const tokenBump = Math.max(MIN_RESUME_TOKEN_BUMP, Math.ceil(task.max_tokens * 0.25));
+  return {
+    max_steps: task.max_steps + stepBump,
+    max_tokens: task.max_tokens + tokenBump,
+    stepBump,
+    tokenBump,
+  };
+}
 
 export type BroadcastFn = (payload: { kind: string; jobId?: number; taskId?: number; data?: unknown }) => void;
 
@@ -40,6 +66,197 @@ export class GristOrchestrator {
     this.broadcast({ kind, jobId, taskId, data });
   }
 
+  private async bootstrapTaskRuntime(taskId: number): Promise<boolean> {
+    const task = getTask(taskId);
+    const job = task ? getJob(task.job_id) : undefined;
+    if (!task || !job) return false;
+    if (task.kind === "root" || task.role === "manager") return true;
+    if (!["implementer", "verifier"].includes(task.role)) return true;
+
+    const currentRuntime = parseTaskRuntime(task.runtime_json);
+    if (currentRuntime.mode === "docker" && currentRuntime.status === "running") return true;
+
+    const worktreePath = task.worktree_path || job.repo_path;
+    const runtime = await startBestEffortTaskRuntime({
+      jobId: task.job_id,
+      taskId: task.id,
+      repoPath: job.repo_path,
+      worktreePath,
+    });
+    updateTask(task.id, { runtime_json: stringifyTaskRuntime(runtime) });
+
+    if (runtime.mode === "docker" && runtime.status === "running") {
+      insertEvent({
+        job_id: task.job_id,
+        task_id: task.id,
+        level: "info",
+        type: "runtime_ready",
+        message: `Docker runtime ready (${runtime.strategy})`,
+        data_json: JSON.stringify(runtime),
+      });
+      return true;
+    }
+
+    insertEvent({
+      job_id: task.job_id,
+      task_id: task.id,
+      level: runtime.status === "failed" ? "warn" : "info",
+      type: "runtime_unavailable",
+      message: runtime.lastError || "No task runtime available; continuing on the host",
+      data_json: JSON.stringify(runtime),
+    });
+    return true;
+  }
+
+  private cleanupTaskRuntime(taskId: number): void {
+    const task = getTask(taskId);
+    const job = task ? getJob(task.job_id) : undefined;
+    if (!task || !job) return;
+    const runtime = parseTaskRuntime(task.runtime_json);
+    if (runtime.mode !== "docker") return;
+    stopTaskRuntime(runtime, task.worktree_path || job.repo_path);
+    updateTask(task.id, {
+      runtime_json: stringifyTaskRuntime({ ...runtime, status: "stopped", lastError: "" }),
+    });
+    insertEvent({
+      job_id: task.job_id,
+      task_id: task.id,
+      level: "info",
+      type: "runtime_stopped",
+      message: "Stopped task runtime",
+      data_json: JSON.stringify(runtime),
+    });
+  }
+
+  private ensureTaskWorkspace(taskId: number): boolean {
+    const task = getTask(taskId);
+    const job = task ? getJob(task.job_id) : undefined;
+    if (!task || !job) return false;
+    const gitBootstrap = ensureGitRepo(job.repo_path);
+    if (!gitBootstrap.ok) {
+      insertEvent({
+        job_id: task.job_id,
+        task_id: task.id,
+        level: "error",
+        type: "git_bootstrap_failed",
+        message: gitBootstrap.message,
+      });
+      updateTask(task.id, { status: "failed", blocker: gitBootstrap.message });
+      return false;
+    }
+    if (gitBootstrap.initialized) {
+      insertEvent({
+        job_id: task.job_id,
+        task_id: task.id,
+        level: "info",
+        type: "git_bootstrap",
+        message: gitBootstrap.message,
+      });
+    }
+    if (task.write_mode !== "worktree") return true;
+    if (task.worktree_path) return true;
+
+    const headBootstrap = ensureHeadCommit(job.repo_path);
+    if (!headBootstrap.ok) {
+      insertEvent({
+        job_id: task.job_id,
+        task_id: task.id,
+        level: "error",
+        type: "git_head_failed",
+        message: headBootstrap.message,
+      });
+      updateTask(task.id, { status: "failed", blocker: headBootstrap.message });
+      return false;
+    }
+    if (headBootstrap.createdInitialCommit) {
+      insertEvent({
+        job_id: task.job_id,
+        task_id: task.id,
+        level: "info",
+        type: "git_initial_commit",
+        message: headBootstrap.message,
+        data_json: JSON.stringify({ headRef: headBootstrap.headRef }),
+      });
+    }
+
+    const worktreePath = defaultWorktreePath(this.appWorkspaceRoot, task.job_id, task.id);
+    const baseRef = headBootstrap.headRef || defaultBranchName(job.repo_path) || "HEAD";
+    const branch = `grist-task-${task.job_id}-${task.id}-${Date.now()}`;
+    const res = createWorktree(job.repo_path, worktreePath, baseRef, branch);
+    if (!res.ok) {
+      insertEvent({
+        job_id: task.job_id,
+        task_id: task.id,
+        level: "error",
+        type: "worktree_failed",
+        message: res.stderr,
+      });
+      updateTask(task.id, { status: "failed", blocker: res.stderr });
+      return false;
+    }
+
+    const scratchpad = task.scratchpad_path || scratchpadPath(this.appWorkspaceRoot, task.job_id, task.id);
+    updateTask(task.id, {
+      worktree_path: worktreePath,
+      scratchpad_path: scratchpad,
+      git_branch: branch,
+      base_ref: baseRef,
+      runtime_json: "{}",
+      current_action: "workspace_ready",
+    });
+    ensureScratchpad(scratchpad);
+    insertEvent({
+      job_id: task.job_id,
+      task_id: task.id,
+      level: "info",
+      type: "worktree_ready",
+      message: `Isolated worktree ${worktreePath}`,
+      data_json: JSON.stringify({ branch, baseRef }),
+    });
+    return true;
+  }
+
+  private maybeSpawnRoleFollowups(taskId: number): void {
+    const task = getTask(taskId);
+    if (!task || task.status !== "done") return;
+
+    if (task.role === "implementer") {
+      const existingVerifier = listTasksForJob(task.job_id).find(
+        (candidate) => candidate.parent_task_id === task.id && candidate.role === "verifier"
+      );
+      if (!existingVerifier) {
+        const verifierId = this.spawnVerifierTask(task.job_id, task.id);
+        if (verifierId) {
+          this.emit("verifier_spawned", task.job_id, verifierId, { parentTaskId: task.id });
+        }
+      }
+    }
+  }
+
+  private extendTaskBudgetForExplicitResume(taskId: number, source: "enqueue" | "resume_all"): void {
+    const task = getTask(taskId);
+    if (!task) return;
+    const patch = explicitResumeBudgetPatch(task);
+    updateTask(taskId, {
+      max_steps: patch.max_steps,
+      max_tokens: patch.max_tokens,
+    });
+    insertEvent({
+      job_id: task.job_id,
+      task_id: taskId,
+      level: "info",
+      type: "budget_extended",
+      message: `Explicit resume added ${patch.stepBump} steps and ${patch.tokenBump.toLocaleString()} tokens`,
+      data_json: JSON.stringify({
+        source,
+        stepBump: patch.stepBump,
+        tokenBump: patch.tokenBump,
+        maxSteps: patch.max_steps,
+        maxTokens: patch.max_tokens,
+      }),
+    });
+  }
+
   createJob(input: {
     repoPath: string;
     goal: string;
@@ -51,6 +268,7 @@ export class GristOrchestrator {
   }): number {
     const d = input.defaultProvider || "mock";
     ensureGristDir(input.repoPath);
+    ensureGitRepo(input.repoPath);
     return insertJob({
       repo_path: input.repoPath,
       user_goal: input.goal,
@@ -79,11 +297,15 @@ export class GristOrchestrator {
           if (this.inflight.has(taskId)) return;
           const ac = new AbortController();
           this.aborts.set(taskId, ac);
-          const p = runTaskWorker(taskId, ac.signal, this.appWorkspaceRoot, (msg) => {
-            this.emit("duplicate_hint", jobId, taskId, { msg });
-          }, (kind, jId, tId, data) => {
-            this.emit(kind, jId, tId, data);
-          })
+          const p = (async () => {
+            if (!this.ensureTaskWorkspace(taskId)) return;
+            await this.bootstrapTaskRuntime(taskId);
+            await runTaskWorker(taskId, ac.signal, this.appWorkspaceRoot, (msg) => {
+              this.emit("duplicate_hint", jobId, taskId, { msg });
+            }, (kind, jId, tId, data) => {
+              this.emit(kind, jId, tId, data);
+            });
+          })()
             .catch((e) => {
               insertEvent({
                 job_id: jobId,
@@ -95,6 +317,8 @@ export class GristOrchestrator {
               updateTask(taskId, { status: "failed", blocker: String(e) });
             })
             .finally(() => {
+              this.cleanupTaskRuntime(taskId);
+              this.maybeSpawnRoleFollowups(taskId);
               this.aborts.delete(taskId);
               this.inflight.delete(taskId);
               this.emit("worker_done", jobId, taskId);
@@ -127,12 +351,14 @@ export class GristOrchestrator {
   spawnPatchTask(jobId: number, goal: string): number | null {
     const job = getJob(jobId);
     if (!job) return null;
+    const headBootstrap = ensureHeadCommit(job.repo_path);
+    if (!headBootstrap.ok) return null;
     const branch = `grist-patch-${Date.now()}`;
     const id = insertTask({
       job_id: jobId,
       parent_task_id: null,
       kind: "patch_writer",
-      role: "patch_writer",
+      role: "implementer",
       goal,
       scope_json: JSON.stringify({}),
       status: "queued",
@@ -142,6 +368,9 @@ export class GristOrchestrator {
       workspace_repo_mode: "isolated_worktree",
       scratchpad_path: "",
       worktree_path: null,
+      git_branch: "",
+      base_ref: "",
+      runtime_json: "{}",
       max_steps: 32,
       max_tokens: 48000,
       current_action: "init",
@@ -156,7 +385,7 @@ export class GristOrchestrator {
       artifact_type: "candidate_patch",
     });
     const wt = defaultWorktreePath(this.appWorkspaceRoot, jobId, id);
-    const res = createWorktree(job.repo_path, wt, "HEAD", branch);
+    const res = createWorktree(job.repo_path, wt, headBootstrap.headRef || defaultBranchName(job.repo_path) || "HEAD", branch);
     if (!res.ok) {
       insertEvent({
         job_id: jobId,
@@ -169,7 +398,13 @@ export class GristOrchestrator {
       return id;
     }
     const sp = scratchpadPath(this.appWorkspaceRoot, jobId, id);
-    updateTask(id, { worktree_path: wt, scratchpad_path: sp });
+    updateTask(id, {
+      worktree_path: wt,
+      scratchpad_path: sp,
+      git_branch: branch,
+      base_ref: headBootstrap.headRef || defaultBranchName(job.repo_path) || "HEAD",
+      runtime_json: "{}",
+    });
     ensureScratchpad(sp);
     insertEvent({
       job_id: jobId,
@@ -200,6 +435,9 @@ export class GristOrchestrator {
       workspace_repo_mode: "shared_read_only",
       scratchpad_path: "",
       worktree_path: patch.worktree_path,
+      git_branch: patch.git_branch,
+      base_ref: patch.base_ref,
+      runtime_json: "{}",
       max_steps: 2,
       max_tokens: 8000,
       current_action: "verify",
@@ -234,6 +472,7 @@ export class GristOrchestrator {
     }
     if (a.type === "stop") {
       this.aborts.get(a.taskId)?.abort();
+      this.cleanupTaskRuntime(a.taskId);
       updateTask(a.taskId, { status: "stopped" });
       this.emit("task_stopped", undefined, a.taskId);
       return;
@@ -263,6 +502,7 @@ export class GristOrchestrator {
     if (a.type === "enqueue") {
       const t = getTask(a.taskId);
       if (t && (t.status === "paused" || t.status === "stopped")) {
+        this.extendTaskBudgetForExplicitResume(a.taskId, "enqueue");
         updateTask(a.taskId, { status: "queued", blocker: "" });
       }
       return;
@@ -275,7 +515,7 @@ export class GristOrchestrator {
         job_id: t.job_id,
         parent_task_id: a.stopOriginal ? null : t.id,
         kind: t.kind,
-        role: `${t.role}_fork`,
+        role: t.role,
         goal: a.newGoal,
         scope_json: a.newScopeJson ?? t.scope_json,
         status: "queued",
@@ -284,7 +524,10 @@ export class GristOrchestrator {
         write_mode: t.write_mode,
         workspace_repo_mode: t.workspace_repo_mode,
         scratchpad_path: "",
-        worktree_path: t.worktree_path,
+        worktree_path: t.write_mode === "worktree" ? null : t.worktree_path,
+        git_branch: "",
+        base_ref: t.base_ref,
+        runtime_json: "{}",
         max_steps: t.max_steps,
         max_tokens: t.max_tokens,
         current_action: "forked",
@@ -336,7 +579,10 @@ export class GristOrchestrator {
     if (a.type === "resume_all") {
       updateJob(a.jobId, { status: "running" });
       for (const t of listTasksForJob(a.jobId)) {
-        if (t.status === "paused") updateTask(t.id, { status: "queued" });
+        if (t.status === "paused") {
+          this.extendTaskBudgetForExplicitResume(t.id, "resume_all");
+          updateTask(t.id, { status: "queued", blocker: "" });
+        }
       }
       return;
     }
@@ -344,6 +590,7 @@ export class GristOrchestrator {
       this.stopScheduler(a.jobId);
       updateJob(a.jobId, { status: "stopped" });
       for (const t of listTasksForJob(a.jobId)) {
+        this.cleanupTaskRuntime(t.id);
         if (["running", "ready", "queued"].includes(t.status)) {
           this.aborts.get(t.id)?.abort();
           updateTask(t.id, { status: "stopped" });
@@ -371,6 +618,14 @@ export class GristOrchestrator {
 
   jobLevelEvents(jobId: number) {
     return listJobLevelEvents(jobId, 500);
+  }
+
+  cleanupAllRuntimes(): void {
+    for (const job of listJobs()) {
+      for (const task of listTasksForJob(job.id)) {
+        this.cleanupTaskRuntime(task.id);
+      }
+    }
   }
 
   listAllJobs() {

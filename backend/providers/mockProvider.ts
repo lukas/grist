@@ -10,7 +10,35 @@ export class MockProvider implements ModelProvider {
   private step = 0;
 
   async generateText(input: ModelRequest): Promise<ModelResponse> {
-    const t = `mock:${input.userPrompt.slice(0, 40)}`;
+    let t = `mock:${input.userPrompt.slice(0, 40)}`;
+    if (input.userPrompt.startsWith("Verifier worker.")) {
+      t = JSON.stringify({
+        passed: false,
+        checks: [
+          { name: "mock-runtime-check", status: "failed", details: "Docker unavailable in mock/local environment" },
+        ],
+        tests_run: ["npm test"],
+        failures: ["Docker runtime unavailable; verifier used fallback context"],
+        failing_logs_summary: "Mock verifier observed fallback path",
+        likely_root_cause: "Docker daemon unavailable",
+        summary: "Mock verifier completed using fallback metadata.",
+        confidence: 0.5,
+        recommended_next_action: "Inspect runtime_unavailable event",
+      });
+    } else if (input.userPrompt.startsWith("You are the summarizer worker.")) {
+      t = JSON.stringify({
+        confirmed_facts: ["Mock summarizer ran"],
+        top_hypotheses: ["Docker fallback metadata was emitted"],
+        contradictions: [],
+        recommended_next_tasks: [],
+        open_questions: [],
+        handoff_notes: ["Review runtime_unavailable events when Docker is offline."],
+        overall_confidence: 0.5,
+        summary_text: "Mock summary complete",
+        final_summary: "Mock summary complete",
+        recommendation: "no_more_work",
+      });
+    }
     return {
       text: t,
       raw: t,

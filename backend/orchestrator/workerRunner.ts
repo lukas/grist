@@ -4,7 +4,13 @@ import { insertEvent, listEventsByTaskId } from "../db/eventRepo.js";
 import { insertArtifact } from "../db/artifactRepo.js";
 import { createProvider } from "../providers/providerFactory.js";
 import { loadAppSettings } from "../settings/appSettings.js";
-import { WorkerDecisionSchema } from "../types/taskState.js";
+import {
+  WorkerDecisionSchema,
+  WorkerPacketSchema,
+  defaultArtifactContentForRole,
+  expectedArtifactTypeForRole,
+} from "../types/taskState.js";
+import { WORKER_ROLES, type WorkerRole } from "../types/models.js";
 import { executeTool } from "../tools/executeTool.js";
 import type { ToolContext } from "../tools/toolTypes.js";
 import { ensureScratchpad } from "../workspace/scratchpadManager.js";
@@ -15,6 +21,7 @@ import { execSync } from "node:child_process";
 import { ensureHomeMemory, ensureRepoMemory, collectMemoryContext } from "../memory/memoryManager.js";
 import { runReflection } from "./reflection.js";
 import { buildSkillIndex } from "../skills/skillManager.js";
+import { parseTaskRuntime } from "../runtime/taskRuntime.js";
 
 /* ─── Three-tier context compaction (inspired by Claude Code + OpenHands) ─── */
 
@@ -143,17 +150,21 @@ function buildToolContext(
 ): ToolContext {
   const t = task;
   const allowed = JSON.parse(t.allowed_tools_json) as string[];
-  // If task allows writes but has no worktree yet, write directly to the repo
-  const worktree = t.worktree_path || (t.write_mode !== "none" ? jobRepoPath : null);
+  const scope = safeParseScope(t.scope_json);
+  const worktree = t.worktree_path || (t.write_mode !== "none" && t.workspace_repo_mode !== "isolated_worktree" ? jobRepoPath : null);
+  const runtime = parseTaskRuntime(t.runtime_json);
   return {
     jobId: t.job_id,
     taskId: t.id,
     repoPath: jobRepoPath,
     worktreePath: worktree,
+    scopeFiles: scope.files,
     scratchpadPath: t.scratchpad_path,
     appWorkspaceRoot,
     allowedToolNames: allowed,
     commandAllowlist,
+    commandEnv: runtime.hostPorts.http ? { GRIST_HOST_PORT: String(runtime.hostPorts.http) } : undefined,
+    runtime,
     emit,
   };
 }
@@ -162,6 +173,58 @@ function mergeJsonArray(existing: string, additions: unknown[] | undefined): str
   if (!additions?.length) return existing;
   const cur = JSON.parse(existing || "[]") as unknown[];
   return JSON.stringify([...cur, ...additions]);
+}
+
+function safeParseScope(scopeJson: string): { files?: string[] } {
+  try {
+    const parsed = JSON.parse(scopeJson || "{}") as Record<string, unknown>;
+    const files = Array.isArray(parsed.files)
+      ? parsed.files.filter((f): f is string => typeof f === "string" && f.trim() !== "")
+      : undefined;
+    return files?.length ? { files } : {};
+  } catch {
+    return {};
+  }
+}
+
+function safeParsePacket(scopeJson: string): import("../types/taskState.js").WorkerPacket {
+  try {
+    return WorkerPacketSchema.parse(JSON.parse(scopeJson || "{}"));
+  } catch {
+    return WorkerPacketSchema.parse({});
+  }
+}
+
+function isWorkerRole(role: string): role is WorkerRole {
+  return (WORKER_ROLES as readonly string[]).includes(role);
+}
+
+function describeRoleContract(role: WorkerRole): string {
+  switch (role) {
+    case "scout":
+      return `Role contract:
+- Scout only. Do repo reconnaissance and analogous-pattern discovery.
+- Prefer list_files, grep_code, read_file, read_git_history, read_artifacts, and safe commands.
+- Finish with artifact type "findings_report" containing: relevant_files, analogous_patterns, commands_to_run, ambiguity_notes.`;
+    case "implementer":
+      return `Role contract:
+- Implementer only. Write code in your isolated worktree and stay inside packet.files when provided.
+- Read existing artifacts first when useful, then implement, then run focused validation commands when possible.
+- Finish with artifact type "candidate_patch" containing: diff_summary, files_changed, tests_added, migration_notes.`;
+    case "reviewer":
+      return `Role contract:
+- Reviewer only. Do read-only regression/style/API review.
+- Prefer read_artifacts, read_file, grep_code, and focused safe commands.
+- Finish with artifact type "review_report" containing: findings, risk_flags, api_consistency_notes.`;
+    case "verifier":
+      return `Role contract:
+- Verifier only. Run the provided checks and summarize pass/fail evidence.
+- Finish with artifact type "verification_result".`;
+    case "summarizer":
+      return `Role contract:
+- Summarizer only. Compress worker artifacts into a concise final handoff.
+- Finish with artifact type "final_summary".`;
+  }
 }
 
 export async function runTaskWorker(
@@ -282,6 +345,13 @@ export async function runTaskWorker(
     const allowed = JSON.parse(task.allowed_tools_json) as string[];
     const canWrite = allowed.includes("write_file");
     const skillContext = buildSkillIndex(repoPath);
+    const packet = safeParsePacket(task.scope_json);
+    const typedRole = isWorkerRole(task.role) ? task.role : null;
+    const runtime = parseTaskRuntime(task.runtime_json);
+    const roleContract = typedRole ? describeRoleContract(typedRole) : `Role contract: complete the task using the allowed tools and finish with a structured artifact when appropriate.`;
+    const artifactContract = typedRole
+      ? `Expected finish artifact type: ${expectedArtifactTypeForRole(typedRole)}`
+      : `Expected finish artifact type: ${task.artifact_type || "(none specified)"}`;
     const sys = `You are a Grist coding agent. Task role: ${task.role}. Step ${stepNum} of max ${task.max_steps}.
 OPTIMIZE FOR SPEED: minimize wall-clock time by running independent tools in parallel.
 
@@ -307,9 +377,20 @@ Use call_tools to run independent operations in parallel — e.g. reading multip
 IMPORTANT:
 - Do NOT read_file a file you just wrote — you already know its contents.
 - Do NOT parallelize tools that depend on each other (e.g. read then write based on read).
+- If Scope.files is non-empty, you may ONLY modify files in that list.
+- If a write is rejected as outside scope, do not retry the same out-of-scope path. Adjust to the allowed files or finish with a concise explanation.
+- Workers return artifacts, not essays. Keep reasoning terse and put the durable handoff into the artifact.
 - Call write_memory when you discover something notable (architecture decisions, gotchas, conventions). Don't wait until the end.
 - After writing code, test it with run_command_safe when possible.
-- When done, use {"decision":"finish", "reasoning_summary":"what was accomplished"}.
+- When done, use {"decision":"finish", "reasoning_summary":"what was accomplished", "artifact":{"type":"...", "content":{...}}}.
+${roleContract}
+${artifactContract}
+Runtime:
+- mode: ${runtime.mode}
+- status: ${runtime.status}
+- strategy: ${runtime.strategy}
+- service URLs: ${runtime.serviceUrls.join(", ") || "(none)"}
+- if a Docker runtime is running, run_command_safe / run_tests prefer that runtime automatically.
 ${skillContext ? `\n\n${skillContext}` : ""}`;
 
     const compacted = await compactHistory(history, provider, emit);
@@ -328,7 +409,13 @@ Task goal: ${task.goal}
 Scope: ${task.scope_json}
 Current action: ${task.current_action}
 Findings so far: ${task.findings_json}
-Open questions: ${task.open_questions_json}${historyBlock}`;
+Open questions: ${task.open_questions_json}
+Git branch: ${task.git_branch || "(none)"}
+Base ref: ${task.base_ref || "(none)"}
+Runtime metadata:
+${JSON.stringify(runtime, null, 2)}
+Worker packet:
+${JSON.stringify(packet, null, 2)}${historyBlock}`;
 
     emit("info", "prompt", `step ${stepNum}`, { system: sys, user, step: stepNum });
     log({ timestamp: new Date().toISOString(), step: stepNum, type: "prompt", data: { system: sys, user } });
@@ -510,13 +597,31 @@ Open questions: ${task.open_questions_json}${historyBlock}`;
     if (decision.decision === "finish") {
       const cur = getTask(taskId);
       if (!cur) break;
-      const art = decision.artifact;
-      if (art) {
+      const artifactToPersist: { type: string; content: unknown } | undefined = (() => {
+        if (typedRole) {
+          const expectedType = expectedArtifactTypeForRole(typedRole);
+          if (!decision.artifact) {
+            return {
+              type: expectedType,
+              content: defaultArtifactContentForRole(typedRole, decision.reasoning_summary || "done"),
+            };
+          }
+          if (decision.artifact.type !== expectedType) {
+            emit("warn", "artifact_type_mismatch", `Expected ${expectedType} for role ${typedRole}, got ${decision.artifact.type}. Using fallback artifact.`);
+            return {
+              type: expectedType,
+              content: defaultArtifactContentForRole(typedRole, decision.reasoning_summary || "done"),
+            };
+          }
+        }
+        return decision.artifact ? { type: decision.artifact.type, content: decision.artifact.content } : undefined;
+      })();
+      if (artifactToPersist) {
         insertArtifact({
           job_id: cur.job_id,
           task_id: cur.id,
-          type: art.type,
-          content_json: JSON.stringify(art.content),
+          type: artifactToPersist.type,
+          content_json: JSON.stringify(artifactToPersist.content),
           confidence: tsu?.confidence ?? 0.7,
         });
       }

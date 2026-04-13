@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join, normalize } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createWorktree, getWorktreeDiff, removeWorktree } from "../workspace/worktreeManager.js";
 import { assertUnderWorktree } from "./pathGuard.js";
@@ -21,6 +21,7 @@ export function toolCreateWorktree(
 export function toolWriteFile(ctx: ToolContext, args: { path: string; content: string }): ToolResult {
   if (!ctx.worktreePath) return { ok: false, error: "No worktree — writes forbidden" };
   try {
+    assertPathInScope(ctx, args.path);
     const full = assertUnderWorktree(ctx.worktreePath, args.path);
     mkdirSync(join(full, ".."), { recursive: true });
     writeFileSync(full, args.content, "utf8");
@@ -33,6 +34,9 @@ export function toolWriteFile(ctx: ToolContext, args: { path: string; content: s
 export function toolApplyPatch(ctx: ToolContext, args: { diff: string }): ToolResult {
   if (!ctx.worktreePath) return { ok: false, error: "No worktree — patch forbidden" };
   try {
+    for (const file of extractPatchFiles(args.diff)) {
+      assertPathInScope(ctx, file);
+    }
     const patchFile = join(ctx.worktreePath, ".grist_patch.diff");
     writeFileSync(patchFile, args.diff, "utf8");
     const r = spawnSync("git", ["apply", patchFile], { cwd: ctx.worktreePath, encoding: "utf8", timeout: 60_000 });
@@ -57,4 +61,27 @@ export function toolRemoveWorktree(ctx: ToolContext): ToolResult {
   const r = removeWorktree(ctx.repoPath, ctx.worktreePath);
   if (!r.ok) return { ok: false, error: r.stderr };
   return { ok: true, data: { removed: true } };
+}
+
+function assertPathInScope(ctx: ToolContext, relPath: string): void {
+  const scopeFiles = ctx.scopeFiles?.map(normalizeRelativePath).filter(Boolean);
+  if (!scopeFiles || scopeFiles.length === 0) return;
+  const candidate = normalizeRelativePath(relPath);
+  if (!scopeFiles.includes(candidate)) {
+    throw new Error(`Write outside task scope: ${relPath} (allowed: ${scopeFiles.join(", ")})`);
+  }
+}
+
+function normalizeRelativePath(relPath: string): string {
+  return normalize(relPath).replace(/^(\.\/)+/, "").replace(/^\/+/, "");
+}
+
+function extractPatchFiles(diff: string): string[] {
+  return Array.from(
+    new Set([
+      ...Array.from(diff.matchAll(/^diff --git a\/(.+?) b\/.+$/gm), (m) => normalizeRelativePath(m[1])),
+      ...Array.from(diff.matchAll(/^\+\+\+ b\/(.+)$/gm), (m) => normalizeRelativePath(m[1])),
+      ...Array.from(diff.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm), (m) => normalizeRelativePath(m[1])),
+    ]),
+  );
 }

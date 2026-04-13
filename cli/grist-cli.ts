@@ -124,6 +124,9 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         goal,
         notes,
         defaultProvider: settings.defaultProvider,
+        plannerProvider: settings.plannerProvider,
+        reducerProvider: settings.reducerProvider,
+        verifierProvider: settings.verifierProvider,
       });
       console.log(rootTaskId);
     },
@@ -183,6 +186,7 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         status: t.status,
         steps: `${t.steps_used}/${t.max_steps}`,
         tokens: t.tokens_used,
+        branch: t.git_branch || "",
         goal: t.goal.slice(0, 50),
       })));
     },
@@ -225,6 +229,7 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         status: t.status,
         steps: `${t.steps_used}/${t.max_steps}`,
         tokens: t.tokens_used,
+        branch: t.git_branch || "",
         blocker: (t.blocker || "").slice(0, 40),
       })));
     },
@@ -246,6 +251,9 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         tokens: task.tokens_used,
         blocker: task.blocker,
         confidence: task.confidence,
+        branch: task.git_branch,
+        baseRef: task.base_ref,
+        runtime: JSON.parse(task.runtime_json || "{}"),
         findings: JSON.parse(task.findings_json || "[]"),
       });
     },

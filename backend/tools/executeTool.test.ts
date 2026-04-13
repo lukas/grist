@@ -13,6 +13,7 @@ function ctx(repo: string, allowed: string[]): ToolContext {
     taskId: 1,
     repoPath: repo,
     worktreePath: null,
+    scopeFiles: undefined,
     scratchpadPath: scratch,
     appWorkspaceRoot: join(repo, ".swarm"),
     allowedToolNames: allowed,
@@ -68,5 +69,18 @@ describe("executeTool", () => {
     const c = ctx(repo, ["write_file"]);
     const r = await executeTool("write_file", { path: "x.txt", content: "z" }, c);
     expect(r.ok).toBe(false);
+  });
+
+  it("write_file rejects paths outside task scope", async () => {
+    const c = { ...ctx(repo, ["write_file"]), worktreePath: repo, scopeFiles: ["owned.js"] };
+    const r = await executeTool("write_file", { path: "other.js", content: "z" }, c);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("Write outside task scope");
+  });
+
+  it("write_file allows paths inside task scope", async () => {
+    const c = { ...ctx(repo, ["write_file"]), worktreePath: repo, scopeFiles: ["owned.js"] };
+    const r = await executeTool("write_file", { path: "owned.js", content: "z" }, c);
+    expect(r.ok).toBe(true);
   });
 });

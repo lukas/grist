@@ -6,6 +6,7 @@ import { NewTaskForm } from "./components/NewTaskForm";
 import { SettingsModal } from "./components/SettingsModal";
 import { SkillsModal } from "./components/SkillsModal";
 import { RepoDialog } from "./components/RepoDialog";
+import { CreateRepoDialog } from "./components/CreateRepoDialog";
 import { AutoPauseBanner } from "./components/AutoPauseBanner";
 import { MemoryDrawer } from "./components/MemoryDrawer";
 import { MemoryViewer } from "./components/MemoryViewer";
@@ -46,6 +47,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [repoDialogOpen, setRepoDialogOpen] = useState(false);
+  const [createRepoDialogOpen, setCreateRepoDialogOpen] = useState(false);
   const [provider, setProvider] = useState("");
   const [pauseWarnings, setPauseWarnings] = useState<{ taskId: number; message: string }[]>([]);
   const [memoryOpen, setMemoryOpen] = useState(false);
@@ -107,6 +109,10 @@ export default function App() {
   }, [rootTaskId, refresh]);
 
   const openRepoDialog = () => setRepoDialogOpen(true);
+  const openCreateRepoDialog = () => {
+    setRepoDialogOpen(false);
+    setCreateRepoDialogOpen(true);
+  };
 
   const switchRepo = (repoPath: string) => {
     setRepo(repoPath);
@@ -117,6 +123,7 @@ export default function App() {
   const onRepoSelected = (repoPath: string) => {
     setRepo(repoPath);
     setRepoDialogOpen(false);
+    setCreateRepoDialogOpen(false);
   };
 
   const startRun = async (goal: string) => {
@@ -181,6 +188,7 @@ export default function App() {
         provider={provider}
         onSelectRepo={switchRepo}
         onPickRepo={openRepoDialog}
+        onCreateRepo={openCreateRepoDialog}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenSkills={() => setSkillsOpen(true)}
         memoryOpen={memoryOpen}
@@ -230,7 +238,14 @@ export default function App() {
       {repoDialogOpen && (
         <RepoDialog
           onSelect={onRepoSelected}
+          onCreateRepo={openCreateRepoDialog}
           onCancel={() => setRepoDialogOpen(false)}
+        />
+      )}
+      {createRepoDialogOpen && (
+        <CreateRepoDialog
+          onSelect={onRepoSelected}
+          onCancel={() => setCreateRepoDialogOpen(false)}
         />
       )}
     </div>

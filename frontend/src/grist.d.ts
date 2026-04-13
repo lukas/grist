@@ -1,4 +1,4 @@
-import type { TaskControlAction, RootTaskControlAction } from "../../shared/ipc";
+import type { TaskControlAction, RootTaskControlAction, RepoDefaults, CreateRepoRequest, CreateRepoResult } from "../../shared/ipc";
 
 declare global {
   interface RootTaskSummary {
@@ -33,6 +33,9 @@ declare global {
     parent_task_id: number | null;
     blocker: string;
     current_action: string;
+    git_branch: string;
+    base_ref: string;
+    runtime_json: string;
   }
 
   interface TaskEvent {
@@ -93,6 +96,8 @@ declare global {
       dbPath(): Promise<string>;
       pickRepo(): Promise<string | null>;
       recentRepos(): Promise<string[]>;
+      repoDefaults(): Promise<RepoDefaults>;
+      createRepo(payload: CreateRepoRequest): Promise<CreateRepoResult>;
       isGitRepo(p: string): Promise<boolean>;
       initRepo(dirPath?: string): Promise<string | null>;
 

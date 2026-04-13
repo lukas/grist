@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, nativeImage } from "electron";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -21,6 +21,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 
 app.name = "Grist";
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 let mainWindow: BrowserWindow | null = null;
 let orchestrator: GristOrchestrator;
@@ -81,6 +86,24 @@ function ensureWorkspaceRoot(): string {
   return root;
 }
 
+function expandUserPath(p: string): string {
+  return p.startsWith("~/") ? join(app.getPath("home"), p.slice(2)) : p;
+}
+
+function defaultRepoParent(): string {
+  return join(app.getPath("home"), "grist-repos");
+}
+
+function isGitRepoPath(dirPath: string): boolean {
+  try {
+    if (!existsSync(dirPath)) return false;
+    execFileSync("git", ["rev-parse", "--git-dir"], { cwd: dirPath, stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle(IPC.ping, () => "pong");
   ipcMain.handle(IPC.dbPath, () => join(app.getPath("userData"), "grist.sqlite"));
@@ -100,15 +123,48 @@ function registerIpc(): void {
     return rows.map((r) => r.repo_path).filter((p) => existsSync(p));
   });
 
-  ipcMain.handle(IPC.isGitRepo, (_, p: string) => {
-    try {
-      const resolved = p.startsWith("~/") ? join(app.getPath("home"), p.slice(2)) : p;
-      if (!existsSync(resolved)) return false;
-      execFileSync("git", ["rev-parse", "--git-dir"], { cwd: resolved, stdio: "pipe" });
-      return true;
-    } catch {
-      return false;
+  ipcMain.handle(IPC.repoDefaults, () => ({
+    defaultParent: defaultRepoParent(),
+  }));
+
+  ipcMain.handle(IPC.createRepo, (_, payload: { name: string; parentDir?: string }) => {
+    const name = payload.name.trim();
+    if (!name) {
+      return { ok: false, error: "Repo name is required." };
     }
+    if (name === "." || name === ".." || /[\\/]/.test(name)) {
+      return { ok: false, error: "Repo name cannot contain path separators." };
+    }
+
+    const parentDir = expandUserPath((payload.parentDir || "").trim() || defaultRepoParent());
+    const target = join(parentDir, name);
+
+    try {
+      mkdirSync(parentDir, { recursive: true });
+
+      if (existsSync(target)) {
+        if (isGitRepoPath(target)) {
+          return { ok: true, path: target };
+        }
+        if (readdirSync(target).length > 0) {
+          return { ok: false, error: `Folder already exists and is not empty: ${target}` };
+        }
+      } else {
+        mkdirSync(target, { recursive: true });
+      }
+
+      execFileSync("git", ["init"], { cwd: target, stdio: "pipe" });
+      return { ok: true, path: target };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Failed to create repo.",
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.isGitRepo, (_, p: string) => {
+    return isGitRepoPath(expandUserPath(p));
   });
 
   ipcMain.handle(IPC.initRepo, async (_, dirPath?: string) => {
@@ -121,9 +177,7 @@ function registerIpc(): void {
       if (r.canceled || !r.filePaths[0]) return null;
       target = r.filePaths[0];
     }
-    if (target.startsWith("~/")) {
-      target = join(app.getPath("home"), target.slice(2));
-    }
+    target = expandUserPath(target);
     try {
       mkdirSync(target, { recursive: true });
       execFileSync("git", ["init"], { cwd: target, stdio: "pipe" });
@@ -295,6 +349,23 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
 
+  // Auto-plan and start any draft jobs that were created but not yet started
+  for (const job of listJobs()) {
+    if (job.status === "draft") {
+      const tasks = listTasksForJob(job.id);
+      const rootTask = tasks.find((t) => t.kind === "root" && t.status === "queued");
+      if (rootTask) {
+        console.log(`[startup] auto-planning draft job ${job.id}`);
+        orchestrator.planJob(job.id).then(() => {
+          orchestrator.startScheduler(job.id);
+          console.log(`[startup] scheduler started for job ${job.id}`);
+        }).catch((e) => {
+          console.error(`[startup] failed to plan job ${job.id}:`, e);
+        });
+      }
+    }
+  }
+
   // Resume schedulers for any jobs with active tasks
   const activeStatuses = new Set(["queued", "ready", "running", "blocked"]);
   for (const job of listJobs()) {
@@ -312,13 +383,31 @@ app.whenReady().then(() => {
   });
 });
 
+app.on("second-instance", () => {
+  if (!mainWindow) {
+    if (app.isReady()) createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+});
+
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
-    closeDatabase();
     app.quit();
   }
 });
 
 app.on("before-quit", () => {
+  orchestrator?.cleanupAllRuntimes();
+  for (const job of listJobs()) {
+    orchestrator?.stopScheduler(job.id);
+  }
+});
+
+app.on("quit", () => {
   closeDatabase();
 });

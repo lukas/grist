@@ -5,6 +5,8 @@ export const IPC = {
   dbPath: "grist:dbPath",
   pickRepo: "grist:pickRepo",
   recentRepos: "grist:recentRepos",
+  repoDefaults: "grist:repoDefaults",
+  createRepo: "grist:createRepo",
   initRepo: "grist:initRepo",
   isGitRepo: "grist:isGitRepo",
 
@@ -61,6 +63,21 @@ export type RootTaskControlAction =
   | { type: "pause_all"; rootTaskId: number }
   | { type: "resume_all"; rootTaskId: number }
   | { type: "stop_run"; rootTaskId: number };
+
+export type RepoDefaults = {
+  defaultParent: string;
+};
+
+export type CreateRepoRequest = {
+  name: string;
+  parentDir?: string;
+};
+
+export type CreateRepoResult = {
+  ok: boolean;
+  path?: string;
+  error?: string;
+};
 
 /** Main process `webContents.send(IPC.events, ...)` payload. */
 export type GristEvent = { kind: string; jobId?: number; taskId?: number; data?: unknown };

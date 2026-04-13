@@ -18,6 +18,21 @@ function loadSchemaSql(): string {
 
 let _db: Database.Database | null = null;
 
+function ensureTaskColumns(db: Database.Database): void {
+  const columns = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+  const names = new Set(columns.map((column) => column.name));
+  const required: Array<{ name: string; sql: string }> = [
+    { name: "git_branch", sql: "ALTER TABLE tasks ADD COLUMN git_branch TEXT NOT NULL DEFAULT ''" },
+    { name: "base_ref", sql: "ALTER TABLE tasks ADD COLUMN base_ref TEXT NOT NULL DEFAULT ''" },
+    { name: "runtime_json", sql: "ALTER TABLE tasks ADD COLUMN runtime_json TEXT NOT NULL DEFAULT '{}'" },
+  ];
+  for (const column of required) {
+    if (!names.has(column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
 export function openDatabase(filePath: string): Database.Database {
   if (_db) {
     _db.close();
@@ -26,6 +41,7 @@ export function openDatabase(filePath: string): Database.Database {
   const db = new Database(filePath);
   db.pragma("journal_mode = WAL");
   db.exec(loadSchemaSql());
+  ensureTaskColumns(db);
   _db = db;
   return _db;
 }

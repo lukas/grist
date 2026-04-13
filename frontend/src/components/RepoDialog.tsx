@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 
 type Props = {
   onSelect: (repoPath: string) => void;
+  onCreateRepo: () => void;
   onCancel: () => void;
 };
 
-export function RepoDialog({ onSelect, onCancel }: Props) {
+export function RepoDialog({ onSelect, onCreateRepo, onCancel }: Props) {
   const [recent, setRecent] = useState<string[]>([]);
   const [pathInput, setPathInput] = useState("");
   const [validating, setValidating] = useState(false);
@@ -48,17 +49,6 @@ export function RepoDialog({ onSelect, onCancel }: Props) {
       onSelect(result);
     } else {
       setError("Failed to initialize repo.");
-    }
-  };
-
-  const createNew = async () => {
-    setError("");
-    const target = pathInput.trim() || undefined;
-    const result = await window.grist.initRepo(target);
-    if (result) {
-      onSelect(result);
-    } else if (target) {
-      setError("Failed to create repo at that path.");
     }
   };
 
@@ -145,7 +135,7 @@ export function RepoDialog({ onSelect, onCancel }: Props) {
           <button
             type="button"
             className="flex-1 rounded border border-emerald-600 px-3 py-2 text-sm text-emerald-400 hover:bg-emerald-900/30"
-            onClick={() => void createNew()}
+            onClick={onCreateRepo}
           >
             Create new repo…
           </button>

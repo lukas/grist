@@ -1,12 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "../shared/ipc.js";
-import type { TaskControlAction, RootTaskControlAction, GristEvent } from "../shared/ipc.js";
+import type { TaskControlAction, RootTaskControlAction, GristEvent, RepoDefaults, CreateRepoRequest, CreateRepoResult } from "../shared/ipc.js";
 
 const api = {
   ping: () => ipcRenderer.invoke(IPC.ping) as Promise<string>,
   dbPath: () => ipcRenderer.invoke(IPC.dbPath) as Promise<string>,
   pickRepo: () => ipcRenderer.invoke(IPC.pickRepo) as Promise<string | null>,
   recentRepos: () => ipcRenderer.invoke(IPC.recentRepos) as Promise<string[]>,
+  repoDefaults: () => ipcRenderer.invoke(IPC.repoDefaults) as Promise<RepoDefaults>,
+  createRepo: (payload: CreateRepoRequest) => ipcRenderer.invoke(IPC.createRepo, payload) as Promise<CreateRepoResult>,
   isGitRepo: (p: string) => ipcRenderer.invoke(IPC.isGitRepo, p) as Promise<boolean>,
   initRepo: (dirPath?: string) => ipcRenderer.invoke(IPC.initRepo, dirPath) as Promise<string | null>,
 

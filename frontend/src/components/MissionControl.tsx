@@ -7,6 +7,7 @@ type Props = {
   provider: string;
   onSelectRepo: (repo: string) => void;
   onPickRepo: () => void;
+  onCreateRepo: () => void;
   onOpenSettings: () => void;
   onOpenSkills: () => void;
   memoryOpen: boolean;
@@ -27,6 +28,7 @@ export function MissionControl({
   provider,
   onSelectRepo,
   onPickRepo,
+  onCreateRepo,
   onOpenSettings,
   onOpenSkills,
   memoryOpen,
@@ -114,6 +116,13 @@ export function MissionControl({
             )}
 
             <div className="border-t border-border/40 pt-1">
+              <button
+                type="button"
+                className="w-full px-3 py-1.5 text-left text-sm text-muted hover:bg-white/10 hover:text-white"
+                onClick={() => { setDropdownOpen(false); onCreateRepo(); }}
+              >
+                New repo…
+              </button>
               <button
                 type="button"
                 className="w-full px-3 py-1.5 text-left text-sm text-muted hover:bg-white/10 hover:text-white"

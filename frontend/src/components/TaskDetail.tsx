@@ -68,6 +68,10 @@ export function TaskDetail({
     return <p className="p-4 text-sm text-muted">Select a task to see its activity.</p>;
   }
   if (!task) return <p className="p-4 text-sm">Loading…</p>;
+  const runtime = safeJson(task.runtime_json);
+  const runtimeUrl = Array.isArray(runtime?.serviceUrls) && runtime.serviceUrls[0]
+    ? String(runtime.serviceUrls[0])
+    : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -76,6 +80,21 @@ export function TaskDetail({
         <StatusPill status={task.status} />
         {task.status === "running" && task.current_action && (
           <ActivityBadge action={task.current_action} />
+        )}
+        {task.git_branch && (
+          <span className="rounded bg-white/5 px-2 py-0.5 text-[10px] text-muted">
+            {task.git_branch}
+          </span>
+        )}
+        {runtime?.mode === "docker" && (
+          <span className="rounded bg-sky-500/15 px-2 py-0.5 text-[10px] text-sky-300">
+            docker:{runtime.status}
+          </span>
+        )}
+        {runtimeUrl && (
+          <span className="truncate text-[10px] text-muted">
+            {runtimeUrl}
+          </span>
         )}
         {(task.status === "paused" || task.status === "stopped") && rootTaskId && (
           <button
@@ -155,6 +174,15 @@ type StepGroup = {
   time: string;
 };
 
+type DiffSummary = {
+  kind: "diff" | "patch";
+  files: string[];
+  fileCount: number;
+  insertions: number | null;
+  deletions: number | null;
+  rawText: string;
+};
+
 function groupByStep(events: TaskEvent[]): StepGroup[] {
   const map = new Map<string, StepGroup>();
   const order: string[] = [];
@@ -227,7 +255,10 @@ function StepBlock({ step }: { step: StepGroup }) {
 
   if (!step.reasoning && !step.toolName) return null;
 
+  const diffSummary = summarizeDiffPayload(step.toolResult);
   const toolSummary = step.toolName ? summarizeTool(step.toolName, step.toolArgs, step.toolResult) : "";
+  const compactSummary = diffSummary ? formatDiffHeadline(diffSummary) : toolSummary;
+  const compactFiles = diffSummary ? formatDiffFiles(diffSummary) : "";
 
   return (
     <div className="mb-3">
@@ -242,16 +273,21 @@ function StepBlock({ step }: { step: StepGroup }) {
         <div className="mt-1">
           <button
             type="button"
-            className="group flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left text-[11px] hover:bg-white/5"
+            className="group flex w-full items-start gap-1.5 rounded px-2 py-1 text-left text-[11px] hover:bg-white/5"
             onClick={() => setExpanded(!expanded)}
           >
             <span className={step.toolOk ? "text-emerald-400" : "text-red-400"}>
               {step.toolOk ? "✓" : "✗"}
             </span>
             <span className="font-mono text-gray-500">{step.toolName}</span>
-            {toolSummary && (
-              <span className="truncate text-muted">{toolSummary}</span>
-            )}
+            <div className="min-w-0 flex-1">
+              {compactSummary && (
+                <div className="truncate text-muted">{compactSummary}</div>
+              )}
+              {compactFiles && (
+                <div className="mt-0.5 truncate text-[10px] text-gray-500">{compactFiles}</div>
+              )}
+            </div>
             {(step.tokensIn > 0) && (
               <span className="ml-auto shrink-0 text-[10px] text-gray-600">
                 {step.tokensIn}→{step.tokensOut}
@@ -268,22 +304,10 @@ function StepBlock({ step }: { step: StepGroup }) {
           {expanded && (
             <div className="ml-5 mt-1 space-y-1 border-l border-border/30 pl-3 text-[11px]">
               {step.toolArgs && (
-                <div>
-                  <div className="text-[10px] text-muted">args</div>
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-gray-400">
-                    {JSON.stringify(step.toolArgs, null, 2)}
-                  </pre>
-                </div>
+                <PayloadBlock label="args" value={step.toolArgs} />
               )}
               {step.toolResult && (
-                <div>
-                  <div className="text-[10px] text-muted">result</div>
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-gray-400">
-                    {typeof step.toolResult === "string"
-                      ? step.toolResult
-                      : JSON.stringify(step.toolResult, null, 2)}
-                  </pre>
-                </div>
+                <PayloadBlock label="result" value={step.toolResult} />
               )}
               {step.promptData && (
                 <div>
@@ -317,6 +341,10 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
   const [expanded, setExpanded] = useState(false);
   const data = ev.data_json ? safeJson(ev.data_json) : null;
   const time = ev.created_at.slice(11, 19);
+  const messageDiff = summarizeDiffPayload(ev.message);
+  const eventDetails = data ?? ev.message;
+  const compactMessage = messageDiff ? formatDiffHeadline(messageDiff) : truncateText(ev.message, 240);
+  const compactFiles = messageDiff ? formatDiffFiles(messageDiff) : "";
 
   if (ev.type === "user_message") {
     return (
@@ -351,35 +379,119 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
     );
   }
 
+  if (ev.type === "task_diff") {
+    const diffText = typeof ev.message === "string" ? normalizeDiffText(ev.message) : "";
+    const diffSummary = summarizeDiffPayload(diffText || data || ev.message);
+    return (
+      <div className="my-1.5">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded border border-border/40 bg-white/[0.03] px-2.5 py-1.5 text-left text-xs text-gray-300 hover:bg-white/[0.05]"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className="font-medium text-gray-200">
+            {diffSummary ? formatDiffHeadline(diffSummary) : "Task diff available"}
+          </span>
+          {diffSummary && (
+            <span className="min-w-0 flex-1 truncate text-[10px] text-gray-500">
+              {formatDiffFiles(diffSummary)}
+            </span>
+          )}
+          <span className="shrink-0 text-[10px] text-gray-600">{time}</span>
+          <span className="shrink-0 text-[10px] text-muted">{expanded ? "▲" : "▼"}</span>
+        </button>
+        {expanded && (
+          <div className="mt-1">
+            {diffSummary ? (
+              <DiffPayload summary={diffSummary} />
+            ) : (
+              <PayloadBlock label="diff" value={diffText || ev.message} />
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const color =
     ev.level === "error" ? "text-red-400" :
     ev.level === "warn" ? "text-amber-300" :
     "text-gray-500";
 
   return (
-    <div className={`flex items-start gap-1 py-0.5 text-xs ${color}`}>
-      <span className="font-medium">[{ev.type}]</span>
-      <span className="flex-1">{ev.message}</span>
-      {data && (
-        <button
-          type="button"
-          className="shrink-0 text-[10px] text-muted hover:text-white"
-          onClick={() => setExpanded(!expanded)}
-        >
-          {expanded ? "−" : "+"}
-        </button>
-      )}
-      <span className="shrink-0 text-[10px] text-gray-600">{time}</span>
-      {expanded && data && (
-        <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px]">
-          {JSON.stringify(data, null, 2)}
-        </pre>
+    <div className="py-0.5">
+      <div className={`flex items-start gap-1 text-xs ${color}`}>
+        <span className="font-medium">[{ev.type}]</span>
+        <div className="min-w-0 flex-1">
+          <div className="whitespace-pre-wrap break-words">{compactMessage}</div>
+          {compactFiles && (
+            <div className="mt-0.5 text-[10px] text-gray-500">{compactFiles}</div>
+          )}
+        </div>
+        {(data || messageDiff || ev.message.length > 240) && (
+          <button
+            type="button"
+            className="shrink-0 text-[10px] text-muted hover:text-white"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? "−" : "+"}
+          </button>
+        )}
+        <span className="shrink-0 text-[10px] text-gray-600">{time}</span>
+      </div>
+      {expanded && (
+        <div className="ml-5 mt-1 border-l border-border/30 pl-3">
+          <PayloadBlock label="details" value={eventDetails} />
+        </div>
       )}
     </div>
   );
 }
 
 /* ── Tool summarizer ── */
+
+function PayloadBlock({ label, value }: { label: string; value: unknown }) {
+  const diffSummary = summarizeDiffPayload(value);
+  const text = valueToText(value);
+
+  return (
+    <div>
+      <div className="text-[10px] text-muted">{label}</div>
+      {diffSummary ? (
+        <DiffPayload summary={diffSummary} />
+      ) : (
+        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/20 px-3 py-2 text-gray-400">
+          {text}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function DiffPayload({ summary }: { summary: DiffSummary }) {
+  const [showRaw, setShowRaw] = useState(false);
+
+  return (
+    <div className="mt-1 rounded border border-border/40 bg-white/[0.03] px-3 py-2">
+      <div className="text-[11px] text-gray-200">{formatDiffHeadline(summary)}</div>
+      {summary.files.length > 0 && (
+        <div className="mt-1 text-[10px] text-gray-500">{formatDiffFiles(summary, 8)}</div>
+      )}
+      <button
+        type="button"
+        className="mt-2 text-[10px] text-muted hover:text-white"
+        onClick={() => setShowRaw((v) => !v)}
+      >
+        {showRaw ? "Hide raw diff" : "Show raw diff"}
+      </button>
+      {showRaw && (
+        <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/20 px-3 py-2 text-gray-400">
+          {summary.rawText}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 function summarizeTool(name: string, args: any, result: any): string {
   const r = typeof result === "object" && result ? result : {};
@@ -401,12 +513,119 @@ function summarizeTool(name: string, args: any, result: any): string {
       return args?.pattern ? `"${args.pattern}"` : "";
     case "run_command_safe":
       return args?.command ? args.command.slice(0, 60) : "";
-    case "apply_patch":
-      return args?.patch_path || args?.path || "";
+    case "apply_patch": {
+      const diffSummary = summarizeDiffPayload(result);
+      return diffSummary
+        ? formatDiffHeadline(diffSummary)
+        : (args?.patch_path || args?.path || "");
+    }
     default:
       if (!ok && r.error) return String(r.error).slice(0, 60);
       return "";
   }
+}
+
+function summarizeDiffPayload(value: unknown): DiffSummary | null {
+  for (const text of extractCandidateTexts(value)) {
+    const summary = parseDiffText(normalizeDiffText(text));
+    if (summary) return summary;
+  }
+  return null;
+}
+
+function extractCandidateTexts(value: unknown): string[] {
+  const out: string[] = [];
+  const push = (text: unknown) => {
+    if (typeof text === "string" && text.trim()) out.push(text);
+  };
+
+  push(value);
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    push(obj.message);
+    push(obj.stdout);
+    push(obj.stderr);
+    push(obj.diff);
+    push(obj.patch);
+    push(obj.lines);
+    if (obj.data && typeof obj.data === "object") {
+      const data = obj.data as Record<string, unknown>;
+      push(data.message);
+      push(data.stdout);
+      push(data.stderr);
+      push(data.diff);
+      push(data.patch);
+      push(data.lines);
+    }
+    push(valueToText(value));
+  }
+
+  return [...new Set(out)];
+}
+
+function parseDiffText(text: string): DiffSummary | null {
+  const looksLikeDiff =
+    /(^diff --git a\/)|(^--- a\/)|(^\+\+\+ b\/)|(^\*\*\* Begin Patch)|(\bfiles? changed\b)/m.test(text);
+  if (!looksLikeDiff) return null;
+
+  const files = Array.from(
+    new Set([
+      ...Array.from(text.matchAll(/^diff --git a\/(.+?) b\/.+$/gm), (m) => m[1]),
+      ...Array.from(text.matchAll(/^\+\+\+ b\/(.+)$/gm), (m) => m[1]),
+      ...Array.from(text.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm), (m) => m[1]),
+    ]),
+  );
+
+  const statMatch = text.match(/(\d+)\s+files?\s+changed(?:,\s+(\d+)\s+insertions?\(\+\))?(?:,\s+(\d+)\s+deletions?\(-\))?/);
+  const insertions = statMatch?.[2] ? Number(statMatch[2]) : null;
+  const deletions = statMatch?.[3] ? Number(statMatch[3]) : null;
+  const fileCount = statMatch?.[1] ? Number(statMatch[1]) : files.length;
+
+  return {
+    kind: text.includes("*** Begin Patch") ? "patch" : "diff",
+    files,
+    fileCount: fileCount || files.length,
+    insertions,
+    deletions,
+    rawText: text,
+  };
+}
+
+function normalizeDiffText(text: string): string {
+  return text.replace(/^\[task_diff\]\s*/m, "").trim();
+}
+
+function formatDiffHeadline(summary: DiffSummary): string {
+  const parts = [
+    summary.kind === "patch" ? "patch" : "diff",
+    summary.fileCount > 0 ? `${summary.fileCount} file${summary.fileCount === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  if (summary.insertions != null || summary.deletions != null) {
+    parts.push(`+${summary.insertions ?? 0}/-${summary.deletions ?? 0}`);
+  }
+  return parts.join(" · ");
+}
+
+function formatDiffFiles(summary: DiffSummary, max = 4): string {
+  if (summary.files.length === 0) return "";
+  const shown = summary.files.slice(0, max);
+  const extra = summary.files.length - shown.length;
+  return `files: ${shown.join(", ")}${extra > 0 ? ` +${extra} more` : ""}`;
+}
+
+function valueToText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncateText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max).trimEnd()}…`;
 }
 
 function StatusPill({ status }: { status: string }) {

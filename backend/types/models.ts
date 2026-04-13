@@ -1,5 +1,27 @@
 /** Spec §5 enums as string unions for SQLite storage. */
 
+export const TASK_ROLES = [
+  "root",
+  "manager",
+  "scout",
+  "implementer",
+  "verifier",
+  "reviewer",
+  "summarizer",
+] as const;
+
+export type TaskRole = (typeof TASK_ROLES)[number];
+
+export const WORKER_ROLES = [
+  "scout",
+  "implementer",
+  "verifier",
+  "reviewer",
+  "summarizer",
+] as const;
+
+export type WorkerRole = (typeof WORKER_ROLES)[number];
+
 export type JobStatus =
   | "draft"
   | "planning"
@@ -35,14 +57,19 @@ export type WriteMode = "none" | "worktree";
 
 export type WorkspaceRepoMode = "shared_read_only" | "isolated_worktree";
 
-export type ArtifactType =
-  | "findings_report"
-  | "reducer_summary"
-  | "hypothesis_list"
-  | "candidate_patch"
-  | "verification_result"
-  | "file_map"
-  | "final_summary";
+export const ARTIFACT_TYPES = [
+  "manager_plan",
+  "findings_report",
+  "review_report",
+  "reducer_summary",
+  "hypothesis_list",
+  "candidate_patch",
+  "verification_result",
+  "file_map",
+  "final_summary",
+] as const;
+
+export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 
 export type ModelProviderName = "claude" | "codex" | "kimi" | "mock";
 

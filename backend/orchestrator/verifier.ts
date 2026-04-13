@@ -32,12 +32,21 @@ export async function runVerifierPass(
 
   const settings = loadAppSettings();
   const provider = createProvider(task.assigned_model_provider, settings);
-  const prompt = `Verifier. Goal: ${job.user_goal}
+  const prompt = `Verifier worker. Goal: ${job.user_goal}
 Diff ok: ${diff.ok}
 Diff preview: ${(diff.diff || "").slice(0, 40_000)}
 Test tool result: ${JSON.stringify(testRes).slice(0, 20_000)}
 
-Return JSON: passed (boolean), tests_run (string[]), failures (string[]), summary (string), confidence (0-1), recommended_next_action (string)`;
+Return JSON:
+- passed (boolean)
+- checks ([{name, status: passed|failed|skipped, details}])
+- tests_run (string[])
+- failures (string[])
+- failing_logs_summary (string)
+- likely_root_cause (string)
+- summary (string)
+- confidence (0-1)
+- recommended_next_action (string)`;
 
   const resp = await provider.generateText({
     systemPrompt: "Output only JSON for verifier schema.",

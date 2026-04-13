@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const NON_DISPLAY_KINDS = new Set(["root", "planner"]);
 
@@ -211,6 +212,7 @@ function TreeNode({
   depth: number;
   blocker?: string;
 }) {
+  const blockerText = blocker?.trim();
   return (
     <div
       className={`my-px flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 ${
@@ -237,8 +239,64 @@ function TreeNode({
       <StatusDot status={status} />
       <span className="flex-1 truncate font-medium">{label}</span>
       {sublabel && <span className="shrink-0 text-[10px] text-muted">{sublabel}</span>}
-      {blocker && <span className="shrink-0 truncate text-[10px] text-red-400" title={blocker}>!</span>}
+      {blockerText && <IssueTooltipBadge blockerText={blockerText} />}
     </div>
+  );
+}
+
+function IssueTooltipBadge({ blockerText }: { blockerText: string }) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const iconRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const updatePosition = () => {
+      const rect = iconRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPosition({
+        top: rect.bottom + 8,
+        left: Math.min(rect.right, window.innerWidth - 16),
+      });
+    };
+
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <span className="shrink-0" onClick={(e) => e.stopPropagation()}>
+        <span
+          ref={iconRef}
+          className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-900/50 text-[10px] font-bold text-amber-300 ring-1 ring-amber-700/60"
+          title={`Issue: ${blockerText}`}
+          aria-label={`Issue: ${blockerText}`}
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setOpen(false)}
+        >
+          !
+        </span>
+      </span>
+      {open &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-50 w-64 -translate-x-full rounded border border-amber-700/60 bg-[#1a2233] px-2 py-1.5 text-left text-[11px] leading-snug text-amber-200 shadow-xl"
+            style={{ top: position.top, left: position.left }}
+          >
+            <span className="font-medium text-amber-100">Issue:</span> {blockerText}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -263,12 +321,29 @@ function StatusBadge({ status }: { status: string }) {
 
 function taskSublabel(t: ChildTask): string {
   if (t.status === "running" && t.current_action) {
-    return actionLabel(t.current_action);
+    const runtime = parseRuntimeStatus(t.runtime_json);
+    return runtime ? `${actionLabel(t.current_action)} · ${runtime}` : actionLabel(t.current_action);
   }
   const parts: string[] = [];
   if (t.steps_used > 0) parts.push(`${t.steps_used}/${t.max_steps}`);
   if (t.tokens_used > 0) parts.push(`${t.tokens_used} tok`);
+  if (t.git_branch) parts.push(shortBranch(t.git_branch));
+  const runtime = parseRuntimeStatus(t.runtime_json);
+  if (runtime) parts.push(runtime);
   return parts.join(" · ") || t.kind;
+}
+
+function shortBranch(branch: string): string {
+  return branch.length > 18 ? `${branch.slice(0, 18)}…` : branch;
+}
+
+function parseRuntimeStatus(runtimeJson: string): string {
+  try {
+    const runtime = JSON.parse(runtimeJson) as { mode?: string; status?: string };
+    return runtime.mode === "docker" ? `docker:${runtime.status || "unknown"}` : "";
+  } catch {
+    return "";
+  }
 }
 
 function actionLabel(action: string): string {

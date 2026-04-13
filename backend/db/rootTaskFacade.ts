@@ -7,6 +7,7 @@ import { getDb } from "./db.js";
 import { insertJob, getJob, updateJob, listJobs, type JobRow } from "./jobRepo.js";
 import { insertTask, getTask, updateTask, listTasksForJob, type TaskRow } from "./taskRepo.js";
 import type { ModelProviderName, TaskStatus } from "../types/models.js";
+import { ensureGitRepo } from "../workspace/gitRepoManager.js";
 
 export interface RootTaskSummary {
   id: number;
@@ -80,6 +81,7 @@ export function createRootTask(input: {
   verifierProvider?: ModelProviderName;
 }): number {
   const d = input.defaultProvider || "mock";
+  ensureGitRepo(input.repoPath);
   const jobId = insertJob({
     repo_path: input.repoPath,
     user_goal: input.goal,
@@ -106,6 +108,9 @@ export function createRootTask(input: {
     workspace_repo_mode: "shared_read_only",
     scratchpad_path: "",
     worktree_path: null,
+    git_branch: "",
+    base_ref: "",
+    runtime_json: "{}",
     max_steps: 0,
     max_tokens: 0,
     current_action: "created",

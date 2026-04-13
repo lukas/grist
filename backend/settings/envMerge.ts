@@ -32,20 +32,34 @@ export function envSettingsDefaults(): {
   reducerProvider?: ModelProviderName;
   verifierProvider?: ModelProviderName;
 } {
+  const anthropicApiKey = envString("GRIST_ANTHROPIC_API_KEY") ?? envString("ANTHROPIC_API_KEY");
+  const openaiApiKey = envString("GRIST_OPENAI_API_KEY") ?? envString("OPENAI_API_KEY");
   const defaultProvider =
     envProvider("GRIST_DEFAULT_PROVIDER") ?? (envIndicatesKimi() ? ("kimi" as const) : undefined);
+  const plannerProvider =
+    envProvider("GRIST_PLANNER_PROVIDER")
+    ?? choosePlannerProvider(defaultProvider, { anthropicApiKey, openaiApiKey });
 
   return {
-    anthropicApiKey: envString("GRIST_ANTHROPIC_API_KEY") ?? envString("ANTHROPIC_API_KEY"),
-    openaiApiKey: envString("GRIST_OPENAI_API_KEY") ?? envString("OPENAI_API_KEY"),
+    anthropicApiKey,
+    openaiApiKey,
     kimiBaseUrl: envString("GRIST_KIMI_BASE_URL"),
     kimiModel: envString("GRIST_KIMI_MODEL"),
     kimiApiKey: envString("GRIST_KIMI_API_KEY"),
     claudeModel: envString("GRIST_CLAUDE_MODEL"),
     codexModel: envString("GRIST_CODEX_MODEL"),
     defaultProvider,
-    plannerProvider: envProvider("GRIST_PLANNER_PROVIDER"),
+    plannerProvider,
     reducerProvider: envProvider("GRIST_REDUCER_PROVIDER"),
     verifierProvider: envProvider("GRIST_VERIFIER_PROVIDER"),
   };
+}
+
+function choosePlannerProvider(
+  defaultProvider: ModelProviderName | undefined,
+  keys: { anthropicApiKey?: string; openaiApiKey?: string },
+): ModelProviderName | undefined {
+  if (keys.anthropicApiKey) return "claude";
+  if (keys.openaiApiKey) return "codex";
+  return defaultProvider;
 }

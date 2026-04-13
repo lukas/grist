@@ -16,6 +16,9 @@ export interface TaskRow {
   workspace_repo_mode: WorkspaceRepoMode;
   scratchpad_path: string;
   worktree_path: string | null;
+  git_branch: string;
+  base_ref: string;
+  runtime_json: string;
   max_steps: number;
   max_tokens: number;
   steps_used: number;
@@ -51,6 +54,7 @@ export function insertTask(
       `INSERT INTO tasks (
         job_id, parent_task_id, kind, role, goal, scope_json, status, priority,
         assigned_model_provider, write_mode, workspace_repo_mode, scratchpad_path, worktree_path,
+        git_branch, base_ref, runtime_json,
         max_steps, max_tokens, steps_used, tokens_used,
         current_action, next_action, blocker, confidence,
         files_examined_json, findings_json, open_questions_json, dependencies_json, allowed_tools_json,
@@ -58,6 +62,7 @@ export function insertTask(
       ) VALUES (
         @job_id, @parent_task_id, @kind, @role, @goal, @scope_json, @status, @priority,
         @assigned_model_provider, @write_mode, @workspace_repo_mode, @scratchpad_path, @worktree_path,
+        @git_branch, @base_ref, @runtime_json,
         @max_steps, @max_tokens, 0, 0,
         @current_action, @next_action, @blocker, @confidence,
         @files_examined_json, @findings_json, @open_questions_json, @dependencies_json, @allowed_tools_json,

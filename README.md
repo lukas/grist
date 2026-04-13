@@ -1,13 +1,14 @@
 # Grist
 
-Local **macOS Electron** app to supervise a small team of coding agents against a **git repo**: parallel workers (max 4), structured tool loop, SQLite state, optional **git worktrees** for patches, reducer + verifier artifacts.
+Local **macOS Electron** app to supervise a typed manager-worker swarm against a **git repo**: one manager, scoped workers, structured artifacts, git-first bootstrap, best-effort standalone Docker runtimes with managed ports, isolated local branches/worktrees, and verification/summarization passes.
 
 ## Quick start
 
 ```bash
 npm install
 cp .env.example .env   # optional: local secrets (gitignored)
-npm test               # vitest + preload bundle + Electron smoke on macOS
+npm test               # vitest
+npm run test:electron-smoke
 npm run dev            # UI: http://localhost:5173 + Electron window
 npm run build          # production: dist-electron/ + dist-frontend/
 npm run build:cli      # build CLI artifacts for system Node
@@ -19,9 +20,9 @@ npm run build:cli      # build CLI artifacts for system Node
 
 Everything is a **task**. When you type a goal and hit Run:
 1. A **root task** is created
-2. A **planner task** analyzes the goal and creates work tasks
-3. **Work tasks** (analysis/implementation) execute in parallel (max 4)
-4. Work tasks can spawn their own **subtasks**
+2. A **manager task** (`kind=planner`) creates the canonical worker plan
+3. Typed **worker tasks** (`scout`, `implementer`, `reviewer`, `verifier`, `summarizer`) execute with structured packets and artifacts
+4. Implementers bootstrap into git/local branches, then best-effort Docker runtimes, and verifier/summarizer follow-ups consume worker artifacts
 
 All tasks share the same UI: a tree in the sidebar, chat-style event detail with operator messaging on the right.
 
@@ -32,6 +33,7 @@ All tasks share the same UI: a tree in the sidebar, chat-style event detail with
 - `backend/` — orchestrator, DB, tools, providers, workspace helpers
 - `backend/db/rootTaskFacade.ts` — unified task API wrapping internal tables
 - `shared/ipc.ts` — IPC channel constants and action types
+- `AGENTS.md` — short repo contract for Grist agents
 - `docs/AGENT_HANDOFF.md` — architecture + contracts for agents
 
 ## Frontend API
@@ -75,7 +77,13 @@ Installed skills become visible to workers through the read-only tools `list_ski
 
 ## Recent improvements
 
-- **Parallel greenfield planning**: Empty repos get an architect task + parallel module tasks (not 1 monolithic task)
+- **Typed swarm roles**: manager/scout/implementer/reviewer/verifier/summarizer contracts with structured artifacts
+- **Manager-owned planning**: planner writes a canonical `manager_plan` artifact and only parallelizes independent work
+- **Git-first execution**: Grist initializes non-git repos and creates an initial snapshot before isolated worktrees need a `HEAD`
+- **Best-effort Docker bootstrap**: implementers/verifiers try to start standalone Docker runtimes with per-task ports and fall back to host execution with a structured warning
+- **Isolated implementer branches/worktrees**: implementers now get dedicated local branches and worktrees instead of sharing one checkout
+- **Verifier follow-ups**: completed implementers automatically fan into verifier tasks
+- **Parallel greenfield planning**: Empty repos get shared-contract setup plus file-owned module tasks
 - **Retry on model errors**: Workers retry LLM/parse errors up to 3× with backoff
 - **Git diff captures new files**: Uses `git add -A` + `--cached` diff to include untracked files
 - **Expanded allowlist**: Common dev commands (npm, node, python, git, curl, etc.) + wrapper support (timeout, pipes)

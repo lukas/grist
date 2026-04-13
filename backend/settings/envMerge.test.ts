@@ -29,4 +29,16 @@ describe("envMerge", () => {
     process.env.GRIST_DEFAULT_PROVIDER = "mock";
     expect(envSettingsDefaults().defaultProvider).toBe("mock");
   });
+
+  it("prefers claude as planner when Anthropic key exists", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant";
+    process.env.GRIST_DEFAULT_PROVIDER = "kimi";
+    expect(envSettingsDefaults().plannerProvider).toBe("claude");
+  });
+
+  it("respects explicit planner provider override", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant";
+    process.env.GRIST_PLANNER_PROVIDER = "kimi";
+    expect(envSettingsDefaults().plannerProvider).toBe("kimi");
+  });
 });
