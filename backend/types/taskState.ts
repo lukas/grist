@@ -7,6 +7,7 @@ const ArtifactTypeSchema = z.enum(ARTIFACT_TYPES);
 export const WorkerPacketSchema = z.object({
   files: z.array(z.string()).optional().default([]),
   area: z.string().optional().default(""),
+  workflow_phase: z.string().optional().default(""),
   acceptance_criteria: z.array(z.string()).optional().default([]),
   non_goals: z.array(z.string()).optional().default([]),
   similar_patterns: z.array(z.string()).optional().default([]),

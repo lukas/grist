@@ -2,6 +2,7 @@ import { listTasksForJob, updateTask } from "../db/taskRepo.js";
 import type { TaskRow } from "../db/taskRepo.js";
 import { insertEvent } from "../db/eventRepo.js";
 import { getJob, updateJob } from "../db/jobRepo.js";
+import { listArtifactsForTasks } from "../db/artifactRepo.js";
 
 export const MAX_PARALLEL = 4;
 const STALL_WARN_MS = 30_000;
@@ -40,13 +41,85 @@ function isSoftFailure(task: TaskRow, tasks: TaskRow[]): boolean {
   return false;
 }
 
-export function terminalJobOutcome(tasks: TaskRow[]): { status: "completed" | "failed" | null; softFailedTaskIds: number[] } {
+function verifierPassedByTaskId(jobId: number, tasks: TaskRow[]): Map<number, boolean> {
+  const verifierIds = tasks.filter((task) => task.role === "verifier").map((task) => task.id);
+  const artifacts = listArtifactsForTasks(jobId, verifierIds) as Array<{
+    task_id: number | null;
+    type: string;
+    content_json: string;
+  }>;
+  const latest = new Map<number, boolean>();
+  for (const artifact of artifacts) {
+    if (artifact.type !== "verification_result" || artifact.task_id == null) continue;
+    try {
+      const parsed = JSON.parse(artifact.content_json) as { passed?: unknown };
+      latest.set(artifact.task_id, parsed.passed === true);
+    } catch {
+      latest.set(artifact.task_id, false);
+    }
+  }
+  return latest;
+}
+
+function childMap(tasks: TaskRow[]): Map<number, TaskRow[]> {
+  const map = new Map<number, TaskRow[]>();
+  for (const task of tasks) {
+    if (task.parent_task_id == null) continue;
+    const arr = map.get(task.parent_task_id) || [];
+    arr.push(task);
+    map.set(task.parent_task_id, arr);
+  }
+  return map;
+}
+
+function hasDescendantImplementer(taskId: number, byParent: Map<number, TaskRow[]>): boolean {
+  const stack = [...(byParent.get(taskId) || [])];
+  while (stack.length > 0) {
+    const task = stack.pop()!;
+    if (task.role === "implementer") return true;
+    stack.push(...(byParent.get(task.id) || []));
+  }
+  return false;
+}
+
+function hasPassingDescendantVerifier(
+  taskId: number,
+  byParent: Map<number, TaskRow[]>,
+  passedByTaskId: Map<number, boolean>
+): boolean {
+  const stack = [...(byParent.get(taskId) || [])];
+  while (stack.length > 0) {
+    const task = stack.pop()!;
+    if (task.role === "verifier" && passedByTaskId.get(task.id) === true) return true;
+    stack.push(...(byParent.get(task.id) || []));
+  }
+  return false;
+}
+
+function unresolvedVerifierFailureTaskIds(jobId: number, tasks: TaskRow[]): number[] {
+  const byParent = childMap(tasks);
+  const passedByTaskId = verifierPassedByTaskId(jobId, tasks);
+  return tasks
+    .filter((task) => task.role === "verifier" && passedByTaskId.get(task.id) === false)
+    .filter((task) => !hasPassingDescendantVerifier(task.id, byParent, passedByTaskId))
+    .filter((task) => !hasDescendantImplementer(task.id, byParent))
+    .map((task) => task.id);
+}
+
+export function terminalJobOutcome(
+  jobId: number,
+  tasks: TaskRow[]
+): { status: "completed" | "failed" | null; softFailedTaskIds: number[] } {
   const work = tasks.filter(schedulable);
   if (work.length === 0) return { status: null, softFailedTaskIds: [] };
   const active = work.filter((t) =>
     ["queued", "ready", "running", "blocked", "paused"].includes(t.status)
   );
   if (active.length > 0) return { status: null, softFailedTaskIds: [] };
+  const unresolvedVerifierIds = unresolvedVerifierFailureTaskIds(jobId, work);
+  if (unresolvedVerifierIds.length > 0) {
+    return { status: "failed", softFailedTaskIds: [] };
+  }
   const failed = work.filter((task) => task.status === "failed");
   if (failed.length === 0) return { status: "completed", softFailedTaskIds: [] };
   const softFailed = failed.filter((task) => isSoftFailure(task, work));
@@ -136,7 +209,7 @@ export function runSchedulerTick(jobId: number, hooks: SchedulerHooks): void {
   }
 
   tasks = listTasksForJob(jobId);
-  const terminal = terminalJobOutcome(tasks);
+  const terminal = terminalJobOutcome(jobId, tasks);
   if (job.status === "running" && terminal.status) {
     updateJob(jobId, { status: terminal.status });
     const softFailed = tasks.filter((task) => terminal.softFailedTaskIds.includes(task.id));

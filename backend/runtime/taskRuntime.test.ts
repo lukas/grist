@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  __taskRuntimeInternals,
   buildRuntimeWrappedCommand,
   parseTaskRuntime,
   stringifyTaskRuntime,
@@ -41,5 +42,16 @@ describe("taskRuntime", () => {
 
     expect(wrapped.command).toContain("docker exec");
     expect(wrapped.command).toContain("npm test");
+  });
+
+  it("does not treat CLI node scripts as server runtimes", () => {
+    expect(__taskRuntimeInternals.isLikelyServerScript("node dist/index.js")).toBe(false);
+    expect(__taskRuntimeInternals.isLikelyServerScript("tsc && node dist/index.js")).toBe(false);
+  });
+
+  it("still recognizes common web dev servers", () => {
+    expect(__taskRuntimeInternals.isLikelyServerScript("vite")).toBe(true);
+    expect(__taskRuntimeInternals.isLikelyServerScript("next dev")).toBe(true);
+    expect(__taskRuntimeInternals.isLikelyServerScript("HOST=0.0.0.0 PORT=3000 node server.js")).toBe(true);
   });
 });

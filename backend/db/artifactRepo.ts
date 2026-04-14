@@ -29,3 +29,14 @@ export function listArtifactsForTasks(jobId: number, taskIds: number[]) {
     .prepare(`SELECT * FROM artifacts WHERE job_id = ? AND task_id IN (${placeholders}) ORDER BY id ASC`)
     .all(jobId, ...taskIds);
 }
+
+export function getLatestArtifactForTask(taskId: number, type?: string) {
+  if (type) {
+    return getDb()
+      .prepare("SELECT * FROM artifacts WHERE task_id = ? AND type = ? ORDER BY id DESC LIMIT 1")
+      .get(taskId, type);
+  }
+  return getDb()
+    .prepare("SELECT * FROM artifacts WHERE task_id = ? ORDER BY id DESC LIMIT 1")
+    .get(taskId);
+}

@@ -69,6 +69,15 @@ function packet(overrides: Partial<WorkerPacket>): WorkerPacket {
 }
 
 function buildPlannerPrompt(goal: string, operatorNotes: string, files: string[], isEmpty: boolean): { system: string; user: string } {
+  const greenfieldGuidance = isEmpty
+    ? `
+Empty-repo guidance:
+- Default to exactly one implementer for code-writing work.
+- Only create multiple implementers if the user already provided an explicit file/module split and each writer can succeed without relying on sibling branches being merged first.
+- Do NOT split bootstrap/config/entrypoint work across multiple implementers.
+- If you use a scout in a greenfield repo, keep it read-only and feed the single implementer.
+- Prefer one implementer that bootstraps the project and ships a runnable vertical slice.`
+    : "";
   const system = `You are the MANAGER agent for Grist. You are the single source of truth for a coding swarm.
 Your job is to produce a compact, typed worker plan that:
 - keeps one canonical plan
@@ -90,6 +99,7 @@ Rules:
 - Prefer scout -> implementer for existing repos when reconnaissance materially reduces risk.
 - Prefer implementer -> verifier for code-writing work when a scoped test/check phase is useful.
 - End the plan with exactly one summarizer unless the task is trivial enough that a final summary would be redundant.
+${greenfieldGuidance}
 
 Output ONLY valid JSON matching this shape:
 {
@@ -118,7 +128,7 @@ Output ONLY valid JSON matching this shape:
 
 Requirements:
 - depends_on is 0-indexed into the tasks array.
-- Implementers MUST set packet.files when they edit code.
+- Implementers SHOULD set packet.files whenever ownership is narrow or multiple implementers exist.
 - If two implementers would touch the same files, merge them into one task.
 - Scouts/reviewers should be read-only.
 - Verifiers should depend on the implementer they validate.
@@ -147,115 +157,39 @@ function parseLLMPlan(text: string): ManagerPlan | null {
   }
 }
 
-function extractExplicitFiles(goal: string): string[] {
-  return Array.from(
-    new Set(
-      Array.from(goal.matchAll(/\b([A-Za-z0-9_./-]+\.[A-Za-z0-9]+)\b/g), (m) => m[1])
-        .filter((f) => !f.startsWith("http://") && !f.startsWith("https://"))
-    )
-  );
-}
-
-function buildGreenfieldFallbackTasks(goal: string): FallbackTask[] | null {
-  const files = extractExplicitFiles(goal);
-  if (files.length < 2) return null;
-
-  const architectScope = ["ARCHITECTURE.md"];
-  const tasks: FallbackTask[] = [
-    {
-      role: "implementer",
-      goal: `Define module structure and shared interfaces for: ${goal}. Create a brief ARCHITECTURE.md covering file responsibilities and shared contracts.`,
-      max_steps: 5,
-      packet: packet({
-        files: architectScope,
-        area: "shared architecture",
-        acceptance_criteria: ["Create a concise architecture contract for downstream workers"],
-        non_goals: ["Do not implement feature modules yet"],
-        constraints: ["Only modify shared contract files"],
-        success_criteria: ["Downstream workers can implement their files independently"],
-      }),
-      depends_on: [],
-    },
-  ];
-
-  const integratorCandidates = files.filter((f) => /(^|\/)(index|main|app)\./i.test(f));
-  const integratorFile = integratorCandidates[0];
-  const leafFiles = integratorFile ? files.filter((f) => f !== integratorFile) : files;
-
-  for (const file of leafFiles.slice(0, 4)) {
-    tasks.push({
-      role: "implementer",
-      goal: `Implement ${file} for: ${goal}. Only modify ${file}.`,
-      max_steps: 20,
-      packet: packet({
-        files: [file],
-        area: file,
-        acceptance_criteria: [`Implement ${file}`],
-        non_goals: ["Do not modify unrelated files"],
-        constraints: [`Only modify ${file}`],
-        success_criteria: ["Produce a candidate patch artifact"],
-      }),
-      depends_on: [0],
-    });
-  }
-
-  if (integratorFile && tasks.length < 6) {
-    tasks.push({
-      role: "implementer",
-      goal: `Implement ${integratorFile} for: ${goal}. Wire together the other module files and only modify ${integratorFile}.`,
-      max_steps: 20,
-      packet: packet({
-        files: [integratorFile],
-        area: integratorFile,
-        acceptance_criteria: [`Wire together the module files in ${integratorFile}`],
-        non_goals: ["Do not rewrite leaf modules"],
-        constraints: [`Only modify ${integratorFile}`],
-        success_criteria: ["Produce a candidate patch artifact"],
-      }),
-      depends_on: Array.from({ length: tasks.length - 1 }, (_, i) => i + 1),
-    });
-  }
-
-  return tasks;
-}
-
 function fallbackPlan(goal: string, isEmpty: boolean, fileCount: number): ManagerPlan {
   if (isEmpty) {
-    const greenfieldTasks = buildGreenfieldFallbackTasks(goal);
-    if (greenfieldTasks) {
-      return {
-        reasoning: `Empty repo with explicit module files — architect first, then parallel implementation by owned file${greenfieldTasks.length > 2 ? ", with a final integrator when needed" : ""}.`,
-        accepted_assumptions: ["The requested file list is the intended project shape."],
-        parallelism_notes: ["Parallel implementers are file-scoped and independent."],
-        tasks: greenfieldTasks,
-      };
-    }
     return {
-      reasoning: "Empty repo — architect defines structure, then implementer builds it.",
-      accepted_assumptions: ["Greenfield repo can be bootstrapped from the user goal alone."],
-      parallelism_notes: ["Work remains sequential because interfaces are not yet known."],
+      reasoning: "Empty repo — prefer one writer that bootstraps the project and delivers a runnable slice end-to-end.",
+      accepted_assumptions: [
+        "Greenfield repo can be bootstrapped from the user goal alone.",
+        "Sibling implementer worktrees do not share unmerged code automatically.",
+      ],
+      parallelism_notes: [
+        "Use a single writer task for code changes; rely on parallel tool calls inside that task instead of multiple implementers.",
+      ],
       tasks: [
         {
           role: "implementer",
-          goal: `Define module structure and shared interfaces for: ${goal}. Create a brief ARCHITECTURE.md and any shared type/config files.`,
-          max_steps: 5,
+          goal: `Bootstrap and implement the requested project end-to-end: ${goal}`,
+          max_steps: 50,
           packet: packet({
-            files: ["ARCHITECTURE.md", "types.js"],
-            area: "shared contracts",
-            non_goals: ["Do not implement every feature yet"],
-            success_criteria: ["Shared interfaces exist for later implementation"],
+            area: "greenfield bootstrap + full implementation",
+            acceptance_criteria: [
+              "Create the runnable project scaffold first (manifest/config/entrypoint as needed)",
+              "Implement the requested project end-to-end",
+              "Run at least one focused validation command when possible",
+            ],
+            non_goals: ["Do not leave the repo split across partially complete writer branches"],
+            constraints: [
+              "Keep shared bootstrap, integration, and final runnable state in this task unless the user explicitly decomposed the repo",
+            ],
+            success_criteria: [
+              "Produce a candidate patch artifact",
+              "Leave behind a coherent runnable implementation candidate",
+            ],
           }),
           depends_on: [],
-        },
-        {
-          role: "implementer",
-          goal: `Build the full project: ${goal}`,
-          max_steps: 40,
-          packet: packet({
-            acceptance_criteria: ["Implement the requested project end-to-end"],
-            success_criteria: ["Produce a candidate patch artifact"],
-          }),
-          depends_on: [0],
         },
       ],
     };
@@ -372,11 +306,28 @@ function dropRedundantPlannedVerifiers(plan: ManagerPlan): ManagerPlan {
   };
 }
 
-function validateParallelism(plan: ManagerPlan, isEmpty: boolean, fileCount: number): ManagerPlan {
+function validateParallelism(plan: ManagerPlan, goal: string, isEmpty: boolean, fileCount: number): ManagerPlan {
   const tasks = plan.tasks;
   if (tasks.length <= 1) return plan;
 
   let adjusted = ensureSummarizer(dropRedundantPlannedVerifiers(plan));
+
+  if (isEmpty) {
+    const implementers = adjusted.tasks.filter((t) => t.role === "implementer");
+    if (implementers.length > 1) {
+      const collapsed = ensureSummarizer(fallbackPlan(goal, true, fileCount));
+      return {
+        ...collapsed,
+        reasoning: `${collapsed.reasoning} [Collapsed ${implementers.length} greenfield implementers into one because isolated worktrees cannot rely on sibling code being merged first.]`,
+        accepted_assumptions: Array.from(
+          new Set([...collapsed.accepted_assumptions, ...adjusted.accepted_assumptions])
+        ),
+        parallelism_notes: Array.from(
+          new Set([...collapsed.parallelism_notes, ...adjusted.parallelism_notes])
+        ),
+      };
+    }
+  }
 
   if (adjusted.tasks.length > 7) {
     adjusted = {
@@ -593,7 +544,7 @@ export async function runPlanner(job: JobRow, appWorkspaceRoot: string): Promise
 
   // Validate: enforce sensible parallelism
   const originalCount = plan.tasks.length;
-  plan = validateParallelism(plan, isEmpty, files.length);
+  plan = validateParallelism(plan, job.user_goal, isEmpty, files.length);
   if (plan.tasks.length !== originalCount) {
     insertEvent({
       job_id: job.id,
@@ -690,3 +641,9 @@ export async function runPlanner(job: JobRow, appWorkspaceRoot: string): Promise
   updateJob(job.id, { status: "running" });
   return { taskIds };
 }
+
+export const __plannerInternals = {
+  buildPlannerPrompt,
+  fallbackPlan,
+  validateParallelism,
+};

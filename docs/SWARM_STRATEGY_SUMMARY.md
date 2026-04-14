@@ -38,7 +38,11 @@ Planning rules:
 - append a summarizer if the plan omitted one
 - writable work uses isolated local branches/worktrees
 - implementers automatically trigger verifier follow-ups
+- failed verifiers can trigger automatic repair implementers on the same worktree
+- passing verifiers can trigger one wrap-up implementer for cleanup/docs/PR/memory work
 - manager-planned verifier tasks are dropped when implementers already imply automatic verifier follow-ups
+- empty repos default to one writer unless independence is explicit, because isolated worktrees do not share unmerged code
+- job completion is gated on the latest relevant verifier outcome, not just task terminal status
 
 Worker packets are passed through `scope_json` and typically include:
 
@@ -65,6 +69,7 @@ Parallelism policy:
 - read-only work may run in parallel when independent
 - implementers only run in parallel when file ownership is disjoint
 - if overlapping implementers are detected, planner validation merges them into one implementer task
+- for greenfield repos, planner validation collapses multiple implementers into one writer by default
 
 ## Subtask Tracking
 
@@ -76,6 +81,8 @@ There are two ways new child tasks appear:
 Current automatic follow-up:
 
 - successful `implementer` -> child `verifier`
+- failed `verifier` -> child `implementer` repair task (capped retry depth)
+- passed `verifier` for non-wrap-up work -> child `implementer` wrap-up task
 
 Tracking is relational, not prompt-local:
 
@@ -93,6 +100,7 @@ For writable code work, Grist prefers:
 3. create a local branch and isolated worktree per implementer
 4. best-effort start a task runtime (Docker when possible)
 5. run commands against that runtime when supported
+6. if verification passes, sync changed source files back into the canonical repo
 
 Persisted per-task metadata includes:
 
@@ -108,6 +116,9 @@ The system distinguishes core delivery from auxiliary failures.
 Current recovery behavior:
 
 - verifier with no usable worktree is skipped with a warning artifact instead of hard-failing
+- verifier failure can keep the job alive by spawning a repair implementer instead of ending the run immediately
+- successful verification can still continue the run with a wrap-up pass for cleanup, docs, PR prep, and memory writing
+- if the latest relevant verifier still fails after the repair chain, the run now fails instead of incorrectly completing
 - summarizer tries schema-guided parse, then repair, then a fallback summary artifact
 - final job status becomes `completed` with a warning event when only soft-failure tasks fail after core delivery succeeded
 
@@ -138,3 +149,4 @@ Current weaknesses / review questions:
 - whether the task tree should collapse or group auxiliary tasks more aggressively
 - whether job status should expose `completed_with_warnings` as a first-class state instead of an event on top of `completed`
 - whether summarization should be optional when worker artifacts already provide enough handoff
+- whether future code-sharing/merge support should re-enable productive multi-writer greenfield plans

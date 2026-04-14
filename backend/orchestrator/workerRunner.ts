@@ -214,6 +214,12 @@ function describeRoleContract(role: WorkerRole): string {
     case "implementer":
       return `Role contract:
 - Implementer only. Write code in your isolated worktree and stay inside packet.files when provided.
+- If the repo is greenfield or your scope is broad, prefer one coherent runnable slice over multiple partial branches.
+- Do not assume sibling implementer branches will be merged into your worktree automatically; recreate anything you need yourself.
+- If shared scaffold/config/entrypoint work is missing and you are allowed to write it, create that runnable foundation before polishing leaf modules.
+- Use run_command_safe / run_tests for validation. Do not manage Docker manually unless the task is explicitly about creating container setup files.
+- If Grist already attached a runtime, do not prepend commands with \`cd /workspace &&\`; use the normal repo cwd and let Grist map it into the runtime.
+- Prefer Grist repo tools ("list_files", "read_file", "grep_code") over shell probes like "pwd", "ls", or version checks unless the shell output itself is the thing you need.
 - Read existing artifacts first when useful, then implement, then run focused validation commands when possible.
 - Finish with artifact type "candidate_patch" containing: diff_summary, files_changed, tests_added, migration_notes.`;
     case "reviewer":
@@ -230,6 +236,16 @@ function describeRoleContract(role: WorkerRole): string {
 - Summarizer only. Compress worker artifacts into a concise final handoff.
 - Finish with artifact type "final_summary".`;
   }
+}
+
+function describeWorkflowGuidance(packet: import("../types/taskState.js").WorkerPacket): string {
+  if (packet.workflow_phase !== "wrapup") return "";
+  return `Workflow phase:
+- This is the final wrap-up pass after verification.
+- Clean up rough edges, remove obvious code smells, and update relevant docs/README usage notes.
+- Use write_memory for durable lessons, gotchas, or conventions that future tasks should know.
+- If git remote + GitHub CLI/auth are available, prefer creating a PR from the current branch.
+- If PR creation is blocked, leave the branch PR-ready and record the blocker clearly in the finish artifact.`;
 }
 
 export async function runTaskWorker(
@@ -357,6 +373,7 @@ export async function runTaskWorker(
     const artifactContract = typedRole
       ? `Expected finish artifact type: ${expectedArtifactTypeForRole(typedRole)}`
       : `Expected finish artifact type: ${task.artifact_type || "(none specified)"}`;
+    const workflowGuidance = describeWorkflowGuidance(packet);
     const sys = `You are a Grist coding agent. Task role: ${task.role}. Step ${stepNum} of max ${task.max_steps}.
 OPTIMIZE FOR SPEED: minimize wall-clock time by running independent tools in parallel.
 
@@ -366,7 +383,7 @@ ${canWrite ? `Tool reference:
 - list_files: {"path": ".", "recursive": true} — list files in directory
 - read_file: {"path": "relative/path.ext"} — read a file
 - grep_code: {"pattern": "regex"} — search code
-- run_command_safe: {"command": "npm install"} — run a shell command
+- run_command_safe: {"command": "npm install", "cwd": "."} — run a shell command in the repo/worktree
 ` : ""}
 ${allowed.includes("read_skill") ? `Skill reference:
 - list_skills: {"scope":"visible"} — list installed skills for this repo
@@ -384,13 +401,18 @@ IMPORTANT:
 - Do NOT parallelize tools that depend on each other (e.g. read then write based on read).
 - If Scope.files is non-empty, you may ONLY modify files in that list.
 - If a write is rejected as outside scope, do not retry the same out-of-scope path. Adjust to the allowed files or finish with a concise explanation.
+- In greenfield repos, prioritize a runnable end-to-end candidate over a beautifully decomposed but incomplete module split.
 - Workers return artifacts, not essays. Keep reasoning terse and put the durable handoff into the artifact.
 - Call write_memory when you discover something notable (architecture decisions, gotchas, conventions). Don't wait until the end.
+- If you call "write_memory", always provide non-empty "content".
 - After writing code, test it with run_command_safe when possible.
+- Avoid raw docker/docker compose commands unless the task is specifically to author Docker setup. Grist handles task runtimes itself and raw Docker commands are often blocked.
+- Avoid shell-only environment/version probes like "gh --version" unless you are confirming a blocker; prefer using the task goal to decide whether GitHub CLI is needed.
 - When done, use {"decision":"finish", "reasoning_summary":"what was accomplished", "artifact":{"type":"...", "content":{...}}}.
 - Never use legacy decision names like "write_artifact". If you are done, use "finish".
 ${roleContract}
 ${artifactContract}
+${workflowGuidance}
 Runtime:
 - mode: ${runtime.mode}
 - status: ${runtime.status}

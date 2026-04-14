@@ -2,14 +2,14 @@ import { copyFileSync, existsSync } from "node:fs";
 import { ensureGristDir } from "../logging/taskLogger.js";
 import { insertJob, getJob, updateJob, listJobs } from "../db/jobRepo.js";
 import { insertTask, updateTask, getTask, listTasksForJob } from "../db/taskRepo.js";
-import { listArtifactsForJob } from "../db/artifactRepo.js";
+import { getLatestArtifactForTask, listArtifactsForJob } from "../db/artifactRepo.js";
 import { listEvents, listEventsForTask, listJobLevelEvents } from "../db/eventRepo.js";
 import { insertEvent } from "../db/eventRepo.js";
 import { runPlanner } from "./planner.js";
 import { runSchedulerTick } from "./scheduler.js";
 import { runTaskWorker } from "./workerRunner.js";
 import { runReducerPass } from "./reducer.js";
-import { createWorktree } from "../workspace/worktreeManager.js";
+import { createWorktree, syncWorktreeToRepo } from "../workspace/worktreeManager.js";
 import { defaultWorktreePath, scratchpadPath } from "../workspace/pathUtils.js";
 import { ensureScratchpad } from "../workspace/scratchpadManager.js";
 import {
@@ -22,8 +22,10 @@ import { ensureGitRepo, ensureHeadCommit, defaultBranchName } from "../workspace
 import { ALL_TOOL_NAMES } from "../tools/executeTool.js";
 import type { TaskControlAction, JobControlAction } from "../../shared/ipc.js";
 import type { ModelProviderName } from "../types/models.js";
+import { VerifierOutputSchema, WorkerPacketSchema } from "../types/taskState.js";
 
 const PATCH_TOOLS = ALL_TOOL_NAMES.filter((n) => !["remove_worktree", "create_worktree"].includes(n));
+const MAX_AUTO_REPAIR_DEPTH = 2;
 
 const MIN_RESUME_STEP_BUMP = 5;
 const MIN_RESUME_TOKEN_BUMP = 50_000;
@@ -45,6 +47,260 @@ export function explicitResumeBudgetPatch(task: { max_steps: number; max_tokens:
 }
 
 export type BroadcastFn = (payload: { kind: string; jobId?: number; taskId?: number; data?: unknown }) => void;
+
+function countImplementerDepth(taskId: number, tasksById: Map<number, ReturnType<typeof getTask>>): number {
+  let depth = 0;
+  let cursor = tasksById.get(taskId);
+  while (cursor) {
+    if (cursor.role === "implementer") depth += 1;
+    cursor = cursor.parent_task_id ? tasksById.get(cursor.parent_task_id) : undefined;
+  }
+  return depth;
+}
+
+function buildVerifierRepairGoal(originalGoal: string, summary: string, failures: string[], nextAction: string): string {
+  const parts = [
+    `Repair the issues found by verification for: ${originalGoal}`,
+    summary ? `Verifier summary: ${summary}` : "",
+    failures.length > 0 ? `Failures to address: ${failures.join("; ")}` : "",
+    nextAction ? `Recommended next action: ${nextAction}` : "",
+    "Fix the issue in the existing implementation branch, rerun the relevant validation, and leave a coherent runnable result.",
+  ].filter(Boolean);
+  return parts.join("\n");
+}
+
+function isWrapupTask(scopeJson: string): boolean {
+  try {
+    const parsed = WorkerPacketSchema.parse(JSON.parse(scopeJson || "{}"));
+    return parsed.workflow_phase === "wrapup";
+  } catch {
+    return false;
+  }
+}
+
+function buildWrapupGoal(originalGoal: string): string {
+  return [
+    `Wrap up the completed work for: ${originalGoal}`,
+    "Clean up obvious rough edges, update relevant documentation, prepare git/PR handoff, and write durable memory notes.",
+  ].join("\n");
+}
+
+function readVerifierArtifact(taskId: number) {
+  const latestArtifact = getLatestArtifactForTask(taskId, "verification_result") as
+    | { content_json: string }
+    | undefined;
+  if (!latestArtifact) return null;
+  try {
+    return VerifierOutputSchema.parse(JSON.parse(latestArtifact.content_json));
+  } catch {
+    return null;
+  }
+}
+
+export function spawnAutoRepairTaskForVerifier(
+  verifierTaskId: number,
+  appWorkspaceRoot: string
+): number | null {
+  const verifier = getTask(verifierTaskId);
+  if (!verifier || verifier.role !== "verifier") return null;
+  const parent = verifier.parent_task_id ? getTask(verifier.parent_task_id) : undefined;
+  if (!parent || parent.role !== "implementer") return null;
+  const job = getJob(verifier.job_id);
+  if (!job) return null;
+
+  const existingRepair = listTasksForJob(verifier.job_id).find(
+    (candidate) => candidate.parent_task_id === verifier.id && candidate.role === "implementer"
+  );
+  if (existingRepair) return existingRepair.id;
+
+  const parsed = readVerifierArtifact(verifier.id);
+  if (!parsed) return null;
+  if (parsed.passed) return null;
+
+  const tasks = listTasksForJob(verifier.job_id);
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const depth = countImplementerDepth(parent.id, tasksById);
+  if (depth >= MAX_AUTO_REPAIR_DEPTH) {
+    insertEvent({
+      job_id: verifier.job_id,
+      task_id: verifier.id,
+      level: "warn",
+      type: "repair_skipped",
+      message: `Skipping automatic repair after verifier failure because repair depth ${depth} reached the cap`,
+      data_json: JSON.stringify({ depth, cap: MAX_AUTO_REPAIR_DEPTH }),
+    });
+    return null;
+  }
+
+  const repairTaskId = insertTask({
+    job_id: verifier.job_id,
+    parent_task_id: verifier.id,
+    kind: "patch_writer",
+    role: "implementer",
+    goal: buildVerifierRepairGoal(
+      parent.goal,
+      parsed.summary,
+      parsed.failures || [],
+      parsed.recommended_next_action || ""
+    ),
+    scope_json: parent.scope_json,
+    status: "queued",
+    priority: Math.max(parent.priority + 1, 220),
+    assigned_model_provider: parent.assigned_model_provider,
+    write_mode: "worktree",
+    workspace_repo_mode: "isolated_worktree",
+    scratchpad_path: "",
+    worktree_path: parent.worktree_path,
+    git_branch: parent.git_branch,
+    base_ref: parent.git_branch || parent.base_ref,
+    runtime_json: "{}",
+    max_steps: Math.max(16, Math.min(parent.max_steps, 32)),
+    max_tokens: Math.max(48_000, Math.min(parent.max_tokens, 200_000)),
+    current_action: "repair_requested",
+    next_action: "start",
+    blocker: "",
+    confidence: 0,
+    files_examined_json: "[]",
+    findings_json: JSON.stringify(parsed.failures || []),
+    open_questions_json: "[]",
+    dependencies_json: JSON.stringify([verifier.id]),
+    allowed_tools_json: parent.allowed_tools_json || JSON.stringify(PATCH_TOOLS),
+    artifact_type: "candidate_patch",
+  });
+  const sp = scratchpadPath(appWorkspaceRoot, verifier.job_id, repairTaskId);
+  updateTask(repairTaskId, { scratchpad_path: sp });
+  ensureScratchpad(sp);
+  insertEvent({
+    job_id: verifier.job_id,
+    task_id: repairTaskId,
+    level: "info",
+    type: "repair_task_spawned",
+    message: `Spawned repair implementer from verifier ${verifier.id}`,
+    data_json: JSON.stringify({
+      verifierTaskId: verifier.id,
+      worktreePath: parent.worktree_path,
+      baseRef: parent.git_branch || parent.base_ref,
+      failures: parsed.failures || [],
+    }),
+  });
+  return repairTaskId;
+}
+
+export function applyVerifiedWorktreeToRepo(verifierTaskId: number): boolean {
+  const verifier = getTask(verifierTaskId);
+  if (!verifier || verifier.role !== "verifier") return false;
+  const parent = verifier.parent_task_id ? getTask(verifier.parent_task_id) : undefined;
+  const job = getJob(verifier.job_id);
+  const parsed = readVerifierArtifact(verifier.id);
+  if (!job || !parent || parent.role !== "implementer" || !parent.worktree_path || !parsed?.passed) return false;
+
+  const syncResult = syncWorktreeToRepo(job.repo_path, parent.worktree_path);
+  insertEvent({
+    job_id: verifier.job_id,
+    task_id: verifier.id,
+    level: syncResult.ok ? "info" : "warn",
+    type: syncResult.ok ? "verified_patch_applied" : "verified_patch_apply_failed",
+    message: syncResult.ok
+      ? `Applied ${syncResult.copied.length} file(s) from verified worktree to repo`
+      : `Failed to apply verified worktree to repo: ${syncResult.stderr}`,
+    data_json: JSON.stringify(syncResult),
+  });
+  return syncResult.ok;
+}
+
+export function spawnWrapupTaskForVerifier(
+  verifierTaskId: number,
+  appWorkspaceRoot: string
+): number | null {
+  const verifier = getTask(verifierTaskId);
+  if (!verifier || verifier.role !== "verifier") return null;
+  const parent = verifier.parent_task_id ? getTask(verifier.parent_task_id) : undefined;
+  const job = getJob(verifier.job_id);
+  const parsed = readVerifierArtifact(verifier.id);
+  if (!job || !parent || parent.role !== "implementer" || !parent.worktree_path || !parsed?.passed) return null;
+  if (isWrapupTask(parent.scope_json)) return null;
+
+  const existingWrapup = listTasksForJob(verifier.job_id).find(
+    (candidate) => candidate.parent_task_id === verifier.id && candidate.role === "implementer" && isWrapupTask(candidate.scope_json)
+  );
+  if (existingWrapup) return existingWrapup.id;
+
+  const wrapupPacket = WorkerPacketSchema.parse({
+    workflow_phase: "wrapup",
+    area: "cleanup, docs, PR handoff, memory",
+    acceptance_criteria: [
+      "Clean up obvious code issues that are low-risk and improve maintainability",
+      "Update relevant README or project docs for the delivered change",
+      "Write durable project memory notes if useful lessons emerged",
+      "If possible, leave the branch in PR-ready shape and create a PR",
+    ],
+    non_goals: [
+      "Do not start a new feature branch unrelated to the completed task",
+      "Do not rewrite stable code just for style churn",
+    ],
+    constraints: [
+      "Prefer small, high-leverage cleanup and documentation updates",
+      "Use the existing implementation branch/worktree rather than starting over",
+    ],
+    commands_allowed: [
+      "npm test",
+      "npm run build",
+      "git status",
+      "git add",
+      "git commit",
+      "git push",
+      "gh pr create",
+    ],
+    success_criteria: [
+      "Code and docs are polished enough for handoff",
+      "Useful memory has been persisted",
+      "PR created, or blocker documented precisely if PR creation was not possible",
+    ],
+  });
+
+  const wrapupTaskId = insertTask({
+    job_id: verifier.job_id,
+    parent_task_id: verifier.id,
+    kind: "patch_writer",
+    role: "implementer",
+    goal: buildWrapupGoal(parent.goal),
+    scope_json: JSON.stringify(wrapupPacket),
+    status: "queued",
+    priority: Math.max(parent.priority + 1, 230),
+    assigned_model_provider: parent.assigned_model_provider,
+    write_mode: "worktree",
+    workspace_repo_mode: "isolated_worktree",
+    scratchpad_path: "",
+    worktree_path: parent.worktree_path,
+    git_branch: parent.git_branch,
+    base_ref: parent.git_branch || parent.base_ref,
+    runtime_json: parent.runtime_json || "{}",
+    max_steps: Math.max(12, Math.min(parent.max_steps, 24)),
+    max_tokens: Math.max(48_000, Math.min(parent.max_tokens, 120_000)),
+    current_action: "wrapup_requested",
+    next_action: "start",
+    blocker: "",
+    confidence: 0,
+    files_examined_json: "[]",
+    findings_json: "[]",
+    open_questions_json: "[]",
+    dependencies_json: JSON.stringify([verifier.id]),
+    allowed_tools_json: parent.allowed_tools_json || JSON.stringify(PATCH_TOOLS),
+    artifact_type: "candidate_patch",
+  });
+  const sp = scratchpadPath(appWorkspaceRoot, verifier.job_id, wrapupTaskId);
+  updateTask(wrapupTaskId, { scratchpad_path: sp });
+  ensureScratchpad(sp);
+  insertEvent({
+    job_id: verifier.job_id,
+    task_id: wrapupTaskId,
+    level: "info",
+    type: "wrapup_task_spawned",
+    message: `Spawned wrap-up implementer from verifier ${verifier.id}`,
+    data_json: JSON.stringify({ verifierTaskId: verifier.id, worktreePath: parent.worktree_path }),
+  });
+  return wrapupTaskId;
+}
 
 export class GristOrchestrator {
   private timers = new Map<number, ReturnType<typeof setInterval>>();
@@ -180,7 +436,7 @@ export class GristOrchestrator {
     }
 
     const worktreePath = defaultWorktreePath(this.appWorkspaceRoot, task.job_id, task.id);
-    const baseRef = headBootstrap.headRef || defaultBranchName(job.repo_path) || "HEAD";
+    const baseRef = task.base_ref || headBootstrap.headRef || defaultBranchName(job.repo_path) || "HEAD";
     const branch = `grist-task-${task.job_id}-${task.id}-${Date.now()}`;
     const res = createWorktree(job.repo_path, worktreePath, baseRef, branch);
     if (!res.ok) {
@@ -218,9 +474,9 @@ export class GristOrchestrator {
 
   private maybeSpawnRoleFollowups(taskId: number): void {
     const task = getTask(taskId);
-    if (!task || task.status !== "done") return;
+    if (!task) return;
 
-    if (task.role === "implementer") {
+    if (task.role === "implementer" && task.status === "done") {
       const existingVerifier = listTasksForJob(task.job_id).find(
         (candidate) => candidate.parent_task_id === task.id && candidate.role === "verifier"
       );
@@ -228,6 +484,22 @@ export class GristOrchestrator {
         const verifierId = this.spawnVerifierTask(task.job_id, task.id);
         if (verifierId) {
           this.emit("verifier_spawned", task.job_id, verifierId, { parentTaskId: task.id });
+        }
+      }
+    }
+
+    if (task.role === "verifier" && task.status === "done") {
+      const verifierArtifact = readVerifierArtifact(task.id);
+      if (verifierArtifact?.passed) {
+        applyVerifiedWorktreeToRepo(task.id);
+        const wrapupTaskId = spawnWrapupTaskForVerifier(task.id, this.appWorkspaceRoot);
+        if (wrapupTaskId) {
+          this.emit("wrapup_spawned", task.job_id, wrapupTaskId, { parentTaskId: task.id });
+        }
+      } else {
+        const repairTaskId = spawnAutoRepairTaskForVerifier(task.id, this.appWorkspaceRoot);
+        if (repairTaskId) {
+          this.emit("repair_spawned", task.job_id, repairTaskId, { parentTaskId: task.id });
         }
       }
     }

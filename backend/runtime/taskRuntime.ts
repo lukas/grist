@@ -86,6 +86,21 @@ function nodeBootstrapCommands(worktreePath: string): { install: string; runPref
   }
 }
 
+function isLikelyServerScript(script: string): boolean {
+  const normalized = script.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (/\b(vite|next|nuxt|astro|remix|storybook|webpack-dev-server|react-scripts|nodemon|node-dev|http-server|live-server|serve)\b/i.test(normalized)) {
+    return true;
+  }
+  if (/\b(--host|--hostname|--port|HOST=|PORT=)\b/.test(normalized)) {
+    return true;
+  }
+  if (/\b(node|tsx|ts-node)\b/.test(normalized) && /\b(server|api|web|www|listen)\b/i.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
 function detectNodeRuntime(worktreePath: string): RuntimeCandidate | null {
   const packageJsonPath = join(worktreePath, "package.json");
   if (!existsSync(packageJsonPath)) return null;
@@ -115,16 +130,18 @@ function detectNodeRuntime(worktreePath: string): RuntimeCandidate | null {
           workdir: "/workspace",
         };
       }
-      return {
-        strategy: "node_dev",
-        containerPort: 3000,
-        command: `${install} && HOST=0.0.0.0 PORT=3000 ${runPrefix} run dev`,
-        image: "node:20-bookworm",
-        supportsExec: true,
-        workdir: "/workspace",
-      };
+      if (isLikelyServerScript(dev)) {
+        return {
+          strategy: "node_dev",
+          containerPort: 3000,
+          command: `${install} && HOST=0.0.0.0 PORT=3000 ${runPrefix} run dev`,
+          image: "node:20-bookworm",
+          supportsExec: true,
+          workdir: "/workspace",
+        };
+      }
     }
-    if (scripts.start) {
+    if (scripts.start && isLikelyServerScript(scripts.start)) {
       return {
         strategy: "node_dev",
         containerPort: 3000,
@@ -139,6 +156,10 @@ function detectNodeRuntime(worktreePath: string): RuntimeCandidate | null {
   }
   return null;
 }
+
+export const __taskRuntimeInternals = {
+  isLikelyServerScript,
+};
 
 function firstExposedPortFromDockerfile(worktreePath: string): number | undefined {
   const dockerfilePath = join(worktreePath, "Dockerfile");

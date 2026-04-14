@@ -2,28 +2,150 @@ import { spawn } from "node:child_process";
 import type { ToolContext, ToolResult } from "./toolTypes.js";
 import { buildRuntimeWrappedCommand } from "../runtime/taskRuntime.js";
 
-function isAllowed(command: string, allowlist: string[]): boolean {
+function isDirectlyAllowed(command: string, allowlist: string[]): boolean {
   const c = command.trim();
   for (const entry of allowlist) {
     if (c === entry || c.startsWith(entry + " ")) return true;
   }
-  // Allow wrapper commands (timeout, env, nice) if the inner command is allowed
-  const wrapperMatch = c.match(/^(?:timeout|env|nice|nohup)\s+(?:\S+\s+)*?(\S+.*)/);
-  if (wrapperMatch) {
-    const inner = wrapperMatch[1];
-    for (const entry of allowlist) {
-      if (inner === entry || inner.startsWith(entry + " ")) return true;
+  return false;
+}
+
+function unwrapCommand(command: string): string | null {
+  const c = command.trim();
+  const envMatch = c.match(/^env\s+(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+))\s+)*(.*)$/);
+  if (envMatch && envMatch[1]) return envMatch[1].trim();
+  const timeoutMatch = c.match(/^timeout\s+(?:-[^\s]+\s+)*(?:\d+[smhd]?\s+)?(.*)$/);
+  if (timeoutMatch && timeoutMatch[1]) return timeoutMatch[1].trim();
+  const niceMatch = c.match(/^nice\s+(?:-n\s+-?\d+\s+)?(.*)$/);
+  if (niceMatch && niceMatch[1]) return niceMatch[1].trim();
+  const nohupMatch = c.match(/^nohup\s+(.*)$/);
+  if (nohupMatch && nohupMatch[1]) return nohupMatch[1].trim();
+  return null;
+}
+
+function splitTopLevelCommands(command: string): string[] | null {
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    const next = command[i + 1];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
     }
+    if (ch === "\\") {
+      current += ch;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === "\"") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ">" || ch === "<" || ch === "&") {
+      if (ch === "&" && next === "&") {
+        if (!current.trim()) return null;
+        segments.push(current.trim());
+        current = "";
+        i += 1;
+        continue;
+      }
+      return null;
+    }
+    if (ch === ";") {
+      if (!current.trim()) return null;
+      segments.push(current.trim());
+      current = "";
+      continue;
+    }
+    if (ch === "|") {
+      if (next === "|") {
+        if (!current.trim()) return null;
+        segments.push(current.trim());
+        current = "";
+        i += 1;
+        continue;
+      }
+      if (!current.trim()) return null;
+      segments.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
   }
-  // Allow piped/redirected commands if the base command is allowed
-  const pipeMatch = c.match(/^([^|<>&;]+)/);
-  if (pipeMatch && pipeMatch[1].trim() !== c) {
-    const base = pipeMatch[1].trim();
-    for (const entry of allowlist) {
-      if (base === entry || base.startsWith(entry + " ")) return true;
+  if (quote || escaped) return null;
+  if (current.trim()) segments.push(current.trim());
+  return segments.length > 1 ? segments : null;
+}
+
+function hasTopLevelShellSyntax(command: string): boolean {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    const next = command[i + 1];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === "\"") {
+      quote = ch;
+      continue;
+    }
+    if (ch === ";" || ch === ">" || ch === "<") return true;
+    if (ch === "&" || ch === "|") {
+      if (next === ch) return true;
+      if (ch === "|") return true;
+      return true;
     }
   }
   return false;
+}
+
+function isAllowed(command: string, allowlist: string[]): boolean {
+  const c = command.trim();
+  if (!c) return false;
+  const unwrapped = unwrapCommand(c);
+  if (unwrapped) {
+    return isAllowed(unwrapped, allowlist);
+  }
+  const segments = splitTopLevelCommands(c);
+  if (segments) {
+    return segments.every((segment) => isAllowed(segment, allowlist));
+  }
+  if (hasTopLevelShellSyntax(c)) return false;
+  if (isDirectlyAllowed(c, allowlist)) return true;
+  return false;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeCommandForRuntime(command: string, ctx: ToolContext): string {
+  const runtime = ctx.runtime;
+  if (!runtime || runtime.mode !== "docker" || !runtime.workdir) return command.trim();
+  const workdir = escapeRegExp(runtime.workdir);
+  return command
+    .trim()
+    .replace(new RegExp(`^cd\\s+(?:"${workdir}"|'${workdir}'|${workdir})\\s*(?:&&|;)\\s*`), "");
 }
 
 function runWithTimeout(
@@ -67,11 +189,12 @@ export async function toolRunCommandSafe(
 ): Promise<ToolResult> {
   const timeoutMs = args.timeoutMs ?? 60_000;
   const cwd = args.cwd ? args.cwd : (ctx.worktreePath || ctx.repoPath);
-  if (!isAllowed(args.command, ctx.commandAllowlist)) {
+  const normalizedCommand = normalizeCommandForRuntime(args.command, ctx);
+  if (!isAllowed(normalizedCommand, ctx.commandAllowlist)) {
     return { ok: false, error: `Command not in allowlist: ${args.command}` };
   }
   try {
-    const wrapped = buildRuntimeWrappedCommand(ctx.runtime, args.command, cwd, ctx.worktreePath);
+    const wrapped = buildRuntimeWrappedCommand(ctx.runtime, normalizedCommand, cwd, ctx.worktreePath);
     const r = await runWithTimeout(wrapped.command, wrapped.cwd, timeoutMs, abortSignal, ctx.commandEnv);
     return { ok: true, data: r };
   } catch (e) {
@@ -97,3 +220,10 @@ export async function toolRunLint(
   const cmd = args.command || "npm run lint";
   return toolRunCommandSafe(ctx, { command: cmd, timeoutMs: 120_000 }, abortSignal);
 }
+
+export const __executionToolInternals = {
+  hasTopLevelShellSyntax,
+  isAllowed,
+  normalizeCommandForRuntime,
+  splitTopLevelCommands,
+};

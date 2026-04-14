@@ -1,6 +1,6 @@
 # Grist
 
-Local **macOS Electron** app to supervise a typed manager-worker swarm against a **git repo**: one manager, scoped workers, structured artifacts, git-first bootstrap, best-effort standalone Docker runtimes with managed ports, isolated local branches/worktrees, and verification/summarization passes.
+Local **macOS Electron** app to supervise a typed manager-worker swarm against a **git repo**: one manager, scoped workers, structured artifacts, git-first bootstrap, selective best-effort Docker runtimes with managed ports, isolated local branches/worktrees, and verification/summarization passes.
 
 ## Quick start
 
@@ -81,16 +81,24 @@ Installed skills become visible to workers through the read-only tools `list_ski
 - **Typed swarm roles**: manager/scout/implementer/reviewer/verifier/summarizer contracts with structured artifacts
 - **Manager-owned planning**: planner writes a canonical `manager_plan` artifact and only parallelizes independent work
 - **Git-first execution**: Grist initializes non-git repos and creates an initial snapshot before isolated worktrees need a `HEAD`
-- **Best-effort Docker bootstrap**: implementers/verifiers try to start standalone Docker runtimes with per-task ports and fall back to host execution with a structured warning
+- **Best-effort Docker bootstrap**: implementers/verifiers try to start standalone Docker runtimes with per-task ports and fall back to host execution with a structured warning; CLI-style Node apps no longer auto-start a misleading `npm start` container just because they have a `start` script
 - **Isolated implementer branches/worktrees**: implementers now get dedicated local branches and worktrees instead of sharing one checkout
 - **Verifier follow-ups**: completed implementers automatically fan into verifier tasks
-- **Parallel greenfield planning**: Empty repos get shared-contract setup plus file-owned module tasks
+- **Verifier-driven repair**: failed verification can automatically spawn a repair implementer on the same worktree instead of ending the run
+- **Post-verify wrap-up**: passing verification can now trigger one final wrap-up implementer to clean code, update docs, prepare a PR, and write durable memory notes
+- **Safer greenfield planning**: Empty repos now default to one writer owning bootstrap + integration because isolated worktrees do not share unmerged code
+- **Verified apply-back**: when verification passes, Grist copies the changed source files back into the canonical repo and skips transient outputs like `node_modules` and `dist`
+- **Verifier-gated completion**: a run no longer finishes while the latest relevant verifier in a repair chain is still failing
 - **Retry on model errors**: Workers retry LLM/parse errors up to 3× with backoff
 - **Git diff captures new files**: Uses `git add -A` + `--cached` diff to include untracked files
-- **Expanded allowlist**: Common dev commands (npm, node, python, git, curl, etc.) + wrapper support (timeout, pipes)
+- **Expanded allowlist**: Common dev commands (npm, node, python, git, curl, etc.) + safer wrapper/chaining support for benign multi-command probes like `pwd && ls -la`, while still rejecting redirects and mixed dangerous chains
 - **Memory system**: `write_memory`/`read_memory` tools + async post-task reflection
 - **Skill system**: bundled/global/project skill packs, top-bar Skills modal, CLI `skills` entrypoint, runtime `list_skills` / `read_skill`
 - **Compaction preserves file list**: "Files written" entry survives context compaction
+- **Worktree-aware repo tools**: implementer reads/lists/greps now operate against the isolated worktree, not the canonical repo checkout
+- **Wrap-up git/PR commands**: default safe-command allowlist now includes the git/`gh` subset needed for PR-oriented wrap-up passes
+- **Verifier fallback checks**: verifiers now choose from available `test`, `build`, and startup-smoke commands instead of always defaulting to `npm test`, and they do not fail solely because a CLI project lacks a test script
+- **Runtime command normalization**: runtime-backed safe commands now strip redundant `cd /workspace && ...` prefixes before allowlist/execution
 
 ## Spec
 

@@ -4,6 +4,10 @@ import { spawnSync } from "node:child_process";
 import { assertUnderRoot } from "./pathGuard.js";
 import type { ToolContext, ToolResult } from "./toolTypes.js";
 
+function workspaceRoot(ctx: ToolContext): string {
+  return ctx.worktreePath || ctx.repoPath;
+}
+
 function listFilesRecursive(root: string, base: string, maxFiles: number, out: string[]): void {
   if (out.length >= maxFiles) return;
   let entries: string[];
@@ -33,12 +37,13 @@ function listFilesRecursive(root: string, base: string, maxFiles: number, out: s
 export function toolListFiles(ctx: ToolContext, args: { path?: string; recursive?: boolean }): ToolResult {
   try {
     const rel = args.path || ".";
-    const base = assertUnderRoot(ctx.repoPath, rel);
+    const root = workspaceRoot(ctx);
+    const base = assertUnderRoot(root, rel);
     if (!existsSync(base)) return { ok: false, error: "path not found" };
     const max = 400;
     const names: string[] = [];
     if (args.recursive) {
-      listFilesRecursive(ctx.repoPath, base, max, names);
+      listFilesRecursive(root, base, max, names);
     } else {
       for (const e of readdirSync(base)) {
         names.push(join(rel === "." ? "" : rel, e).replace(/^\//, ""));
@@ -55,7 +60,7 @@ export function toolReadFile(
   args: { path: string; startLine?: number; endLine?: number }
 ): ToolResult {
   try {
-    const full = assertUnderRoot(ctx.repoPath, args.path);
+    const full = assertUnderRoot(workspaceRoot(ctx), args.path);
     if (!existsSync(full)) return { ok: false, error: "file not found" };
     const raw = readFileSync(full, "utf8");
     const lines = raw.split(/\r?\n/);
@@ -70,6 +75,7 @@ export function toolReadFile(
 
 export function toolGrepCode(ctx: ToolContext, args: { pattern: string; scopePaths?: string[] }): ToolResult {
   try {
+    const root = workspaceRoot(ctx);
     const scopes = args.scopePaths?.length ? args.scopePaths : ["."];
     const maxHits = 80;
     const hits: { file: string; line: number; text: string }[] = [];
@@ -77,9 +83,9 @@ export function toolGrepCode(ctx: ToolContext, args: { pattern: string; scopePat
 
     const walkFile = (file: string) => {
       if (hits.length >= maxHits) return;
-      const full = assertUnderRoot(ctx.repoPath, file);
+      const full = assertUnderRoot(root, file);
       if (!existsSync(full) || !statSync(full).isFile()) return;
-      if (full.includes(`${ctx.repoPath}/.git`)) return;
+      if (full.includes(`${root}/.git`)) return;
       const text = readFileSync(full, "utf8");
       const lines = text.split(/\r?\n/);
       lines.forEach((line, i) => {
@@ -89,7 +95,7 @@ export function toolGrepCode(ctx: ToolContext, args: { pattern: string; scopePat
     };
 
     const walkDir = (dirRel: string) => {
-      const base = assertUnderRoot(ctx.repoPath, dirRel);
+      const base = assertUnderRoot(root, dirRel);
       if (!existsSync(base)) return;
       const stack = [base];
       while (stack.length && hits.length < maxHits) {
@@ -111,7 +117,7 @@ export function toolGrepCode(ctx: ToolContext, args: { pattern: string; scopePat
           }
           if (st.isDirectory()) stack.push(p);
           else {
-            const rel = relative(ctx.repoPath, p);
+            const rel = relative(root, p);
             walkFile(rel);
           }
         }
@@ -119,8 +125,8 @@ export function toolGrepCode(ctx: ToolContext, args: { pattern: string; scopePat
     };
 
     for (const s of scopes) {
-      const full = assertUnderRoot(ctx.repoPath, s);
-      if (existsSync(full) && statSync(full).isFile()) walkFile(relative(ctx.repoPath, full));
+      const full = assertUnderRoot(root, s);
+      if (existsSync(full) && statSync(full).isFile()) walkFile(relative(root, full));
       else walkDir(s);
     }
 
@@ -134,7 +140,7 @@ export function toolReadGitHistory(ctx: ToolContext, args: { path?: string; limi
   const limit = args.limit ?? 20;
   const pathSpec = args.path ? ["--", args.path] : [];
   const r = spawnSync("git", ["log", `--max-count=${limit}`, "--oneline", ...pathSpec], {
-    cwd: ctx.repoPath,
+    cwd: workspaceRoot(ctx),
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -145,7 +151,7 @@ export function toolReadGitHistory(ctx: ToolContext, args: { path?: string; limi
 export function toolListChangedFiles(ctx: ToolContext, args: { revRange?: string }): ToolResult {
   const range = args.revRange || "HEAD~1..HEAD";
   const r = spawnSync("git", ["diff", "--name-only", range], {
-    cwd: ctx.repoPath,
+    cwd: workspaceRoot(ctx),
     encoding: "utf8",
     timeout: 30_000,
   });
