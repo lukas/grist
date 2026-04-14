@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDatabase, closeDatabase, resetDbSingleton } from "../db/db.js";
 import { insertJob } from "../db/jobRepo.js";
 import { insertTask, updateTask, listTasksForJob } from "../db/taskRepo.js";
-import { depsSatisfied } from "./scheduler.js";
+import { depsSatisfied, terminalJobOutcome } from "./scheduler.js";
 import type { TaskRow } from "../db/taskRepo.js";
 
 describe("depsSatisfied", () => {
@@ -80,5 +80,32 @@ describe("sqlite tasks", () => {
     updateTask(tid, { status: "queued" });
     const rows = listTasksForJob(jid);
     expect(rows[0]?.status).toBe("queued");
+  });
+});
+
+describe("terminalJobOutcome", () => {
+  it("treats summarizer/verifier failure as warnings when implementer succeeded", () => {
+    const tasks = [
+      { id: 1, kind: "patch_writer", role: "implementer", status: "done" },
+      { id: 2, kind: "verifier", role: "verifier", status: "failed" },
+      { id: 3, kind: "reducer", role: "summarizer", status: "failed" },
+    ] as TaskRow[];
+
+    expect(terminalJobOutcome(tasks)).toEqual({
+      status: "completed",
+      softFailedTaskIds: [2, 3],
+    });
+  });
+
+  it("still fails when an implementer fails", () => {
+    const tasks = [
+      { id: 1, kind: "patch_writer", role: "implementer", status: "failed" },
+      { id: 2, kind: "analysis", role: "scout", status: "done" },
+    ] as TaskRow[];
+
+    expect(terminalJobOutcome(tasks)).toEqual({
+      status: "failed",
+      softFailedTaskIds: [],
+    });
   });
 });

@@ -22,6 +22,11 @@ import { ensureHomeMemory, ensureRepoMemory, collectMemoryContext } from "../mem
 import { runReflection } from "./reflection.js";
 import { buildSkillIndex } from "../skills/skillManager.js";
 import { parseTaskRuntime } from "../runtime/taskRuntime.js";
+import {
+  normalizeWorkerDecisionCandidate,
+  tryParseModelJson,
+  WORKER_DECISION_JSON_SCHEMA,
+} from "./workerDecisionUtils.js";
 
 /* ─── Three-tier context compaction (inspired by Claude Code + OpenHands) ─── */
 
@@ -383,6 +388,7 @@ IMPORTANT:
 - Call write_memory when you discover something notable (architecture decisions, gotchas, conventions). Don't wait until the end.
 - After writing code, test it with run_command_safe when possible.
 - When done, use {"decision":"finish", "reasoning_summary":"what was accomplished", "artifact":{"type":"...", "content":{...}}}.
+- Never use legacy decision names like "write_artifact". If you are done, use "finish".
 ${roleContract}
 ${artifactContract}
 Runtime:
@@ -429,6 +435,7 @@ ${JSON.stringify(packet, null, 2)}${historyBlock}`;
         resp = await provider.generateStructured({
           systemPrompt: sys,
           userPrompt: user,
+          jsonSchema: WORKER_DECISION_JSON_SCHEMA,
           maxTokens: canWrite ? 16384 : 4096,
           temperature: 0.2,
         });
@@ -463,15 +470,7 @@ ${JSON.stringify(packet, null, 2)}${historyBlock}`;
 
     let decision;
     try {
-      let raw =
-        resp.parsedJson ??
-        (() => {
-          try {
-            return JSON.parse(resp.text) as unknown;
-          } catch {
-            return null;
-          }
-        })();
+      let raw = tryParseModelJson(JSON.stringify(resp.parsedJson ?? null)) ?? tryParseModelJson(resp.text);
 
       // Recovery: if JSON parse failed and response was truncated, retry with more tokens
       if (raw == null && resp.finishReason === "length") {
@@ -484,12 +483,13 @@ ${JSON.stringify(packet, null, 2)}${historyBlock}`;
             const retryResp = await provider.generateStructured({
               systemPrompt: sys,
               userPrompt: user,
+              jsonSchema: WORKER_DECISION_JSON_SCHEMA,
               maxTokens: doubledMax,
               temperature: 0.2,
             });
             addJobTokenUsage(task.job_id, retryResp.tokensIn + retryResp.tokensOut, retryResp.estimatedCost);
             touchTaskActivity(taskId);
-            const retryParsed = retryResp.parsedJson ?? (() => { try { return JSON.parse(retryResp.text) as unknown; } catch { return null; } })();
+            const retryParsed = tryParseModelJson(JSON.stringify(retryResp.parsedJson ?? null)) ?? tryParseModelJson(retryResp.text);
             if (retryParsed != null) {
               raw = retryParsed;
               resp = retryResp;
@@ -527,21 +527,51 @@ ${JSON.stringify(packet, null, 2)}${historyBlock}`;
       }
 
       if (raw == null) throw new Error("empty decision");
-      const obj = raw as Record<string, unknown>;
-      if (obj.tool && !obj.tool_name) obj.tool_name = obj.tool;
-      if (obj.args && !obj.tool_args) obj.tool_args = obj.args;
-      if (obj.reasoning && !obj.reasoning_summary) obj.reasoning_summary = obj.reasoning;
+      const obj = normalizeWorkerDecisionCandidate(raw, typedRole ? expectedArtifactTypeForRole(typedRole) : task.artifact_type || undefined);
       decision = WorkerDecisionSchema.parse(obj);
     } catch (e) {
-      consecutiveErrors++;
-      emit("warn", "parse_error", `${String(e)} (${consecutiveErrors}/3 consecutive)`, { raw: resp.text.slice(0, 2000) });
-      log({ timestamp: new Date().toISOString(), step: stepNum, type: "error", data: { parse_error: String(e), raw: resp.text.slice(0, 4000) } });
-      if (consecutiveErrors >= 3) {
-        updateTask(taskId, { status: "failed", blocker: "invalid model JSON (3 consecutive parse errors)" });
-        break;
+      try {
+        const repairPrompt = `Your previous output did not match the required JSON schema.
+
+Validation error:
+${String(e)}
+
+Return corrected JSON only.
+Do not use markdown fences.
+Do not use legacy decision names like "write_artifact".
+If done, use {"decision":"finish", ...}.
+
+Invalid output:
+${resp.text.slice(0, 12_000)}`;
+        const repairResp = await provider.generateText({
+          systemPrompt: `${sys}\nRepair the invalid JSON so it matches the schema exactly.`,
+          userPrompt: repairPrompt,
+          jsonSchema: WORKER_DECISION_JSON_SCHEMA,
+          maxTokens: canWrite ? 8192 : 4096,
+          temperature: 0,
+        });
+        addJobTokenUsage(task.job_id, repairResp.tokensIn + repairResp.tokensOut, repairResp.estimatedCost);
+        touchTaskActivity(taskId);
+        const repairedRaw = tryParseModelJson(repairResp.text);
+        if (repairedRaw == null) throw new Error("repair returned no JSON");
+        const repaired = normalizeWorkerDecisionCandidate(
+          repairedRaw,
+          typedRole ? expectedArtifactTypeForRole(typedRole) : task.artifact_type || undefined,
+        );
+        decision = WorkerDecisionSchema.parse(repaired);
+        resp = repairResp;
+        emit("warn", "parse_repaired", `Recovered invalid model output via repair pass`, { step: stepNum });
+      } catch (repairError) {
+        consecutiveErrors++;
+        emit("warn", "parse_error", `${String(e)} (${consecutiveErrors}/3 consecutive)`, { raw: resp.text.slice(0, 2000), repair_error: String(repairError) });
+        log({ timestamp: new Date().toISOString(), step: stepNum, type: "error", data: { parse_error: String(e), repair_error: String(repairError), raw: resp.text.slice(0, 4000) } });
+        if (consecutiveErrors >= 3) {
+          updateTask(taskId, { status: "failed", blocker: "invalid model JSON (3 consecutive parse errors)" });
+          break;
+        }
+        history.push({ role: "tool_result", content: `[system] Your previous response was not valid JSON. Follow the exact schema, output one JSON object, and never use legacy decisions like write_artifact.` });
+        continue;
       }
-      history.push({ role: "tool_result", content: `[system] Your previous response was not valid JSON. Please respond with a valid JSON object.` });
-      continue;
     }
 
     emit("info", "model_response", `step ${stepNum}: ${decision.decision}`, {

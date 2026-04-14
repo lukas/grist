@@ -58,6 +58,7 @@ Execution model:
 - `backend/types/taskState.ts`: plan schema and artifact contracts
 - `backend/types/models.ts`: role and artifact enums
 - `docs/AGENT_HANDOFF.md`: deeper architecture and gotchas
+- `docs/SWARM_STRATEGY_SUMMARY.md`: concise explanation for outside reviewers
 
 ## Commands
 
@@ -98,5 +99,6 @@ npm run dev
 - Worker roles/artifact types are consistent
 - Implementers use isolated worktrees and local branches
 - Runtime metadata is persisted on the task row and cleaned up on stop/quit
+- Verifier/summarizer failures should degrade gracefully when core implementation delivery already succeeded
 - Validation commands still pass
 - Docs reflect the current orchestration model

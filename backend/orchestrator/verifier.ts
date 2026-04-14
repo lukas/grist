@@ -2,15 +2,42 @@ import { getJob } from "../db/jobRepo.js";
 import { insertArtifact } from "../db/artifactRepo.js";
 import { insertEvent } from "../db/eventRepo.js";
 import { addJobTokenUsage } from "../db/jobRepo.js";
-import { updateTask } from "../db/taskRepo.js";
+import { getTask, updateTask } from "../db/taskRepo.js";
 import type { TaskRow } from "../db/taskRepo.js";
 import { createProvider } from "../providers/providerFactory.js";
 import { loadAppSettings } from "../settings/appSettings.js";
 import { VerifierOutputSchema } from "../types/taskState.js";
-import { extractJsonObject } from "../providers/jsonExtract.js";
 import { getWorktreeDiff } from "../workspace/worktreeManager.js";
 import { toolRunTests } from "../tools/executionTools.js";
 import type { ToolContext } from "../tools/toolTypes.js";
+import { tryParseModelJson } from "./workerDecisionUtils.js";
+
+const VERIFIER_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "passed",
+    "checks",
+    "tests_run",
+    "failures",
+    "failing_logs_summary",
+    "likely_root_cause",
+    "summary",
+    "confidence",
+    "recommended_next_action",
+  ],
+  properties: {
+    passed: { type: "boolean" },
+    checks: { type: "array" },
+    tests_run: { type: "array" },
+    failures: { type: "array" },
+    failing_logs_summary: { type: "string" },
+    likely_root_cause: { type: "string" },
+    summary: { type: "string" },
+    confidence: { type: "number" },
+    recommended_next_action: { type: "string" },
+  },
+} as const;
 
 export async function runVerifierPass(
   task: TaskRow,
@@ -19,14 +46,44 @@ export async function runVerifierPass(
   signal?: AbortSignal
 ): Promise<void> {
   const job = getJob(task.job_id);
-  if (!job || !task.worktree_path) {
-    updateTask(task.id, { status: "failed", blocker: "missing job or worktree" });
+  const parent = task.parent_task_id ? getTask(task.parent_task_id) : undefined;
+  const effectiveWorktree = task.worktree_path || (parent?.role === "implementer" ? parent.worktree_path : null);
+  if (!job) {
+    updateTask(task.id, { status: "failed", blocker: "missing job" });
     return;
   }
-  const diff = getWorktreeDiff(job.repo_path, task.worktree_path);
+  if (!effectiveWorktree) {
+    insertArtifact({
+      job_id: task.job_id,
+      task_id: task.id,
+      type: "verification_result",
+      content_json: JSON.stringify({
+        passed: false,
+        checks: [],
+        tests_run: [],
+        failures: ["Verifier skipped: no worktree available"],
+        failing_logs_summary: "",
+        likely_root_cause: "No implementer worktree attached to verifier",
+        summary: "Skipped verifier because no worktree was available.",
+        confidence: 0.2,
+        recommended_next_action: "Inspect planner/orchestrator verifier attachment",
+      }),
+      confidence: 0.2,
+    });
+    updateTask(task.id, { status: "done", current_action: "verifier_skipped", blocker: "missing job or worktree" });
+    insertEvent({
+      job_id: task.job_id,
+      task_id: task.id,
+      level: "warn",
+      type: "verifier_skipped",
+      message: "Skipped verifier because no worktree was available",
+    });
+    return;
+  }
+  const diff = getWorktreeDiff(job.repo_path, effectiveWorktree);
   const testRes = await toolRunTests(
     toolCtx,
-    { command: opts.testCommand, cwd: task.worktree_path },
+    { command: opts.testCommand, cwd: effectiveWorktree },
     signal
   );
 
@@ -48,13 +105,14 @@ Return JSON:
 - confidence (0-1)
 - recommended_next_action (string)`;
 
-  const resp = await provider.generateText({
+  const resp = await provider.generateStructured({
     systemPrompt: "Output only JSON for verifier schema.",
     userPrompt: prompt,
+    jsonSchema: VERIFIER_JSON_SCHEMA,
     maxTokens: 2048,
     temperature: 0,
   });
-  const parsed = VerifierOutputSchema.parse(extractJsonObject(resp.text));
+  const parsed = VerifierOutputSchema.parse(resp.parsedJson ?? tryParseModelJson(resp.text) ?? {});
   insertArtifact({
     job_id: task.job_id,
     task_id: task.id,

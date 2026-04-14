@@ -3,6 +3,17 @@ import { createPortal } from "react-dom";
 
 const NON_DISPLAY_KINDS = new Set(["root", "planner"]);
 
+function visibleTaskTree(tasks: ChildTask[], rootTaskId: number): ChildTask[] {
+  const hiddenIds = new Set(tasks.filter((task) => NON_DISPLAY_KINDS.has(task.kind)).map((task) => task.id));
+  return tasks
+    .filter((task) => !NON_DISPLAY_KINDS.has(task.kind))
+    .map((task) => (
+      hiddenIds.has(task.parent_task_id ?? -1) || task.parent_task_id === rootTaskId
+        ? { ...task, parent_task_id: null }
+        : task
+    ));
+}
+
 export function TaskList({
   repo,
   rootTaskId,
@@ -35,7 +46,7 @@ export function TaskList({
   useEffect(() => {
     for (const rid of expanded) {
       void window.grist.getChildTasks(rid).then((t) => {
-        const tasks = (t as ChildTask[]).filter((c) => !NON_DISPLAY_KINDS.has(c.kind));
+        const tasks = visibleTaskTree(t as ChildTask[], rid);
         setChildTasksByRoot((prev) => ({ ...prev, [rid]: tasks }));
       });
     }
@@ -163,7 +174,7 @@ function TaskNode({
   return (
     <div>
       <TreeNode
-        label={task.role}
+        label={taskDisplayLabel(task)}
         sublabel={taskSublabel(task)}
         status={task.status}
         isSelected={isSelected}
@@ -215,7 +226,7 @@ function TreeNode({
   const blockerText = blocker?.trim();
   return (
     <div
-      className={`my-px flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 ${
+      className={`my-px flex cursor-pointer items-start gap-1 rounded px-1.5 py-1 ${
         isSelected ? "bg-accent/30 text-white" : "text-gray-300 hover:bg-white/5"
       }`}
       onClick={onClick}
@@ -236,9 +247,13 @@ function TreeNode({
       ) : (
         <span className="w-2.5" />
       )}
-      <StatusDot status={status} />
-      <span className="flex-1 truncate font-medium">{label}</span>
-      {sublabel && <span className="shrink-0 text-[10px] text-muted">{sublabel}</span>}
+      <div className="mt-0.5">
+        <StatusDot status={status} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium">{label}</div>
+        {sublabel && <div className="truncate text-[10px] text-muted">{sublabel}</div>}
+      </div>
       {blockerText && <IssueTooltipBadge blockerText={blockerText} />}
     </div>
   );
@@ -325,16 +340,11 @@ function taskSublabel(t: ChildTask): string {
     return runtime ? `${actionLabel(t.current_action)} · ${runtime}` : actionLabel(t.current_action);
   }
   const parts: string[] = [];
-  if (t.steps_used > 0) parts.push(`${t.steps_used}/${t.max_steps}`);
+  if (t.steps_used > 0) parts.push(`${t.steps_used}/${t.max_steps} steps`);
   if (t.tokens_used > 0) parts.push(`${t.tokens_used} tok`);
-  if (t.git_branch) parts.push(shortBranch(t.git_branch));
   const runtime = parseRuntimeStatus(t.runtime_json);
   if (runtime) parts.push(runtime);
-  return parts.join(" · ") || t.kind;
-}
-
-function shortBranch(branch: string): string {
-  return branch.length > 18 ? `${branch.slice(0, 18)}…` : branch;
+  return parts.join(" · ") || taskKindLabel(t.kind);
 }
 
 function parseRuntimeStatus(runtimeJson: string): string {
@@ -351,4 +361,16 @@ function actionLabel(action: string): string {
   if (action.startsWith("step ")) return `step ${action.slice(5)}`;
   if (action === "worker_start") return "starting…";
   return action;
+}
+
+function taskDisplayLabel(task: ChildTask): string {
+  if (task.role === "summarizer") return "summary";
+  if (task.role === "verifier" && task.parent_task_id != null) return "verification";
+  return task.role;
+}
+
+function taskKindLabel(kind: string): string {
+  if (kind === "reducer") return "summary";
+  if (kind === "patch_writer") return "implementation";
+  return kind;
 }

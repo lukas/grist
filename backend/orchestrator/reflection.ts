@@ -11,6 +11,19 @@ import {
   HOME_SUMMARY_MAX_CHARS,
 } from "../memory/memoryManager.js";
 import { extractJsonObject } from "../providers/jsonExtract.js";
+import { tryParseModelJson } from "./workerDecisionUtils.js";
+
+const REFLECTION_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["project_memory", "global_memory", "update_project_summary", "update_global_summary"],
+  properties: {
+    project_memory: { type: "string" },
+    global_memory: { type: "string" },
+    update_project_summary: { anyOf: [{ type: "string" }, { type: "null" }] },
+    update_global_summary: { anyOf: [{ type: "string" }, { type: "null" }] },
+  },
+} as const;
 
 export interface TaskOutcome {
   stepsUsed: number;
@@ -95,6 +108,7 @@ RULES:
     resp = await provider.generateStructured({
       systemPrompt: "You are a memory-management assistant. Write concise notes capturing what a task accomplished and learned. Always produce a project_memory note. Only JSON output.",
       userPrompt: prompt,
+      jsonSchema: REFLECTION_JSON_SCHEMA,
       maxTokens: 2048,
       temperature: 0.2,
     });
@@ -115,14 +129,36 @@ RULES:
   };
 
   try {
-    const parsed = resp.parsedJson ?? extractJsonObject(resp.text);
+    const parsed = resp.parsedJson ?? tryParseModelJson(resp.text) ?? extractJsonObject(resp.text);
     result = parsed as typeof result;
-  } catch {
-    // Parse failed — write a mechanical note
-    const fallback = `Task "${taskGoal}" completed. Role: ${taskRole}. Outcome: ${reasoning.slice(0, 500)}`;
-    writeRepoMemoryFile(repoPath, taskRole || `task-${taskId}`, fallback);
-    emit("info", "reflection_done", "Reflection: wrote fallback project note (parse failed)");
-    return;
+  } catch (parseError) {
+    try {
+      const repair = await provider.generateText({
+        systemPrompt: "You are a memory-management assistant. Repair invalid reflection output into one valid JSON object only.",
+        userPrompt: `Repair this invalid reflection output into valid JSON matching the required schema.
+
+Schema:
+${JSON.stringify(REFLECTION_JSON_SCHEMA, null, 2)}
+
+Validation / parse error:
+${String(parseError)}
+
+Invalid output:
+${resp.text.slice(0, 8000)}`,
+        jsonSchema: REFLECTION_JSON_SCHEMA,
+        maxTokens: 2048,
+        temperature: 0,
+      });
+      const repaired = tryParseModelJson(repair.text) ?? extractJsonObject(repair.text);
+      result = repaired as typeof result;
+      emit("warn", "reflection_repaired", "Reflection output repaired after invalid JSON");
+    } catch {
+      // Parse failed — write a mechanical note
+      const fallback = `Task "${taskGoal}" completed. Role: ${taskRole}. Outcome: ${reasoning.slice(0, 500)}`;
+      writeRepoMemoryFile(repoPath, taskRole || `task-${taskId}`, fallback);
+      emit("info", "reflection_done", "Reflection: wrote fallback project note (parse failed)");
+      return;
+    }
   }
 
   const actions: string[] = [];

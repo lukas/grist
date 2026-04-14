@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 
 type Props = {
+  currentRepo?: string;
   onSelect: (repoPath: string) => void;
   onCreateRepo: () => void;
   onCancel: () => void;
 };
 
-export function RepoDialog({ onSelect, onCreateRepo, onCancel }: Props) {
+export function RepoDialog({ currentRepo, onSelect, onCreateRepo, onCancel }: Props) {
   const [recent, setRecent] = useState<string[]>([]);
   const [pathInput, setPathInput] = useState("");
   const [validating, setValidating] = useState(false);
@@ -52,6 +53,8 @@ export function RepoDialog({ onSelect, onCreateRepo, onCancel }: Props) {
     }
   };
 
+  const visibleRecent = recent.filter((r) => r !== currentRepo);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onCancel}>
       <div
@@ -62,11 +65,11 @@ export function RepoDialog({ onSelect, onCreateRepo, onCancel }: Props) {
         <p className="mb-4 text-xs text-muted">Pick an existing git repo or create a new one.</p>
 
         {/* Recent repos */}
-        {recent.length > 0 && (
+        {visibleRecent.length > 0 && (
           <section className="mb-4">
             <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">Recent</h3>
             <ul className="max-h-40 space-y-0.5 overflow-auto">
-              {recent.map((r) => (
+              {visibleRecent.map((r) => (
                 <li key={r}>
                   <button
                     type="button"

@@ -61,6 +61,7 @@ Everything is a **task**. The old "jobs" table is kept internally but hidden beh
 | Skills | `backend/skills/skillManager.ts`, `backend/tools/skillTools.ts`, `cli/skillsCliCore.ts` |
 | Reflection | `backend/orchestrator/reflection.ts` — async post-task learning distillation |
 | React UI | `frontend/src/App.tsx`, `frontend/src/components/*` (incl. `MemoryDrawer`, `MemoryViewer`, `SkillsModal`) |
+| External review summary | `docs/SWARM_STRATEGY_SUMMARY.md` |
 
 ### Frontend → IPC API
 
@@ -109,6 +110,7 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 - **Best-effort Docker runtime** — `taskRuntime.ts` detects `docker compose`, common Node app dev flows, or a plain `Dockerfile`, allocates a per-task host port when needed, and records runtime state in `runtime_json`. Failures are warnings unless the task cannot proceed for some other reason.
 - **Container-aware command execution** — `run_command_safe` / `run_tests` / `run_lint` prefer `docker exec` automatically when the task runtime supports it; otherwise they run on the host.
 - **Cleanup on stop/quit** — task runtimes are torn down on task stop, job stop, worker completion, and app quit to reduce orphaned containers/ports.
+- **Soft-failure recovery** — when core delivery succeeded, verifier/summarizer failures can now degrade to warning-level completion instead of forcing the entire job into `failed`. Summarizer/verifier paths also use schema-guided parsing with repair/fallback behavior.
 - **Verifier follow-up is automatic** — when an `implementer` finishes successfully, `appOrchestrator.ts` spawns a `verifier` child task if one does not already exist.
 - **Summarizer output** — reducer tasks now act as `summarizer` workers and emit `final_summary` artifacts instead of only reducer-local summaries.
 - **Auto-pause** — 3× identical tool call, 5 consecutive errors, 3 empty tool names.
@@ -163,3 +165,4 @@ Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `s
 | 2026-04-09 | Manual resume now grants extra step/token budget before requeueing paused tasks, so resume can continue a task instead of immediately hitting the same limit again. |
 | 2026-04-13 | Typed swarm orchestration: manager task + `manager_plan`, role-specific worker packets/artifacts, isolated implementer worktrees, automatic verifier follow-ups, `AGENTS.md`, and `final_summary` summarizer output. |
 | 2026-04-13 | Git-first Docker bootstrap: backend git init + initial snapshot fallback, persisted branch/runtime metadata, best-effort Docker runtimes with per-task ports, runtime-aware command execution, and cleanup on stop/quit. |
+| 2026-04-13 | Recoverability/UI cleanup: soft-fail verifier/summarizer handling, reflection/summarizer schema repair, redundant planned verifiers removed, cleaner task tree labels, and `docs/SWARM_STRATEGY_SUMMARY.md` for external review. |

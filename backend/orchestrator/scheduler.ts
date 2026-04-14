@@ -23,15 +23,38 @@ function schedulable(t: TaskRow): boolean {
   return !NON_SCHEDULABLE_KINDS.has(t.kind);
 }
 
-function terminalJobState(tasks: TaskRow[]): "completed" | "failed" | null {
+function hasSuccessfulDelivery(tasks: TaskRow[]): boolean {
   const work = tasks.filter(schedulable);
-  if (work.length === 0) return null;
+  const implementers = work.filter((task) => task.role === "implementer");
+  if (implementers.length > 0) return implementers.some((task) => task.status === "done");
+  return work.some((task) => task.role !== "summarizer" && task.status === "done");
+}
+
+function isSoftFailure(task: TaskRow, tasks: TaskRow[]): boolean {
+  if (task.role === "summarizer" || task.role === "verifier") {
+    return hasSuccessfulDelivery(tasks);
+  }
+  if ((task.role === "scout" || task.role === "reviewer") && tasks.some((candidate) => candidate.role === "implementer" && candidate.status === "done")) {
+    return true;
+  }
+  return false;
+}
+
+export function terminalJobOutcome(tasks: TaskRow[]): { status: "completed" | "failed" | null; softFailedTaskIds: number[] } {
+  const work = tasks.filter(schedulable);
+  if (work.length === 0) return { status: null, softFailedTaskIds: [] };
   const active = work.filter((t) =>
     ["queued", "ready", "running", "blocked", "paused"].includes(t.status)
   );
-  if (active.length > 0) return null;
-  const anyFailed = work.some((t) => t.status === "failed");
-  return anyFailed ? "failed" : "completed";
+  if (active.length > 0) return { status: null, softFailedTaskIds: [] };
+  const failed = work.filter((task) => task.status === "failed");
+  if (failed.length === 0) return { status: "completed", softFailedTaskIds: [] };
+  const softFailed = failed.filter((task) => isSoftFailure(task, work));
+  const criticalFailed = failed.filter((task) => !isSoftFailure(task, work));
+  return {
+    status: criticalFailed.length > 0 ? "failed" : "completed",
+    softFailedTaskIds: softFailed.map((task) => task.id),
+  };
 }
 
 export interface SchedulerHooks {
@@ -113,17 +136,24 @@ export function runSchedulerTick(jobId: number, hooks: SchedulerHooks): void {
   }
 
   tasks = listTasksForJob(jobId);
-  const terminalStatus = terminalJobState(tasks);
-  if (job.status === "running" && terminalStatus) {
-    updateJob(jobId, { status: terminalStatus });
+  const terminal = terminalJobOutcome(tasks);
+  if (job.status === "running" && terminal.status) {
+    updateJob(jobId, { status: terminal.status });
+    const softFailed = tasks.filter((task) => terminal.softFailedTaskIds.includes(task.id));
     insertEvent({
       job_id: jobId,
       task_id: null,
-      level: terminalStatus === "failed" ? "error" : "info",
-      type: terminalStatus === "failed" ? "job_failed" : "job_completed",
-      message: terminalStatus === "failed"
+      level: terminal.status === "failed" ? "error" : softFailed.length > 0 ? "warn" : "info",
+      type: terminal.status === "failed"
+        ? "job_failed"
+        : softFailed.length > 0
+          ? "job_completed_with_warnings"
+          : "job_completed",
+      message: terminal.status === "failed"
         ? `Job failed: ${tasks.filter((t) => t.status === "failed").map((t) => t.role).join(", ")} failed`
-        : "All tasks completed",
+        : softFailed.length > 0
+          ? `Job completed with warnings: ${softFailed.map((task) => task.role).join(", ")} failed but core delivery succeeded`
+          : "All tasks completed",
     });
   }
 }

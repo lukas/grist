@@ -35,6 +35,7 @@ All tasks share the same UI: a tree in the sidebar, chat-style event detail with
 - `shared/ipc.ts` — IPC channel constants and action types
 - `AGENTS.md` — short repo contract for Grist agents
 - `docs/AGENT_HANDOFF.md` — architecture + contracts for agents
+- `docs/SWARM_STRATEGY_SUMMARY.md` — concise external-review summary of task/subtask strategy
 
 ## Frontend API
 
@@ -93,4 +94,4 @@ Installed skills become visible to workers through the read-only tools `list_ski
 
 ## Spec
 
-See `docs/AGENT_HANDOFF.md` for architecture details and contracts.
+See `docs/AGENT_HANDOFF.md` for architecture details and contracts, and `docs/SWARM_STRATEGY_SUMMARY.md` for a shorter outside-review summary of the swarm/task strategy.

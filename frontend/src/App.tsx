@@ -11,6 +11,8 @@ import { AutoPauseBanner } from "./components/AutoPauseBanner";
 import { MemoryDrawer } from "./components/MemoryDrawer";
 import { MemoryViewer } from "./components/MemoryViewer";
 
+const NON_DISPLAY_KINDS = new Set(["root", "planner"]);
+
 class ModalErrorBoundary extends React.Component<
   { fallback: string; children: React.ReactNode },
   { error: string | null }
@@ -121,10 +123,30 @@ export default function App() {
   };
 
   const onRepoSelected = (repoPath: string) => {
-    setRepo(repoPath);
+    switchRepo(repoPath);
+    setMemorySel(null);
     setRepoDialogOpen(false);
     setCreateRepoDialogOpen(false);
   };
+
+  const firstVisibleChildTask = useCallback(async (rootId: number): Promise<number | null> => {
+    const children = await window.grist.getChildTasks(rootId) as ChildTask[];
+    const visible = children.filter((child) => !NON_DISPLAY_KINDS.has(child.kind));
+    return visible[0]?.id ?? null;
+  }, []);
+
+  useEffect(() => {
+    if (!rootTaskId || selectedTaskId != null || memorySel != null) return;
+    let cancelled = false;
+    void firstVisibleChildTask(rootTaskId).then((firstVisible) => {
+      if (!cancelled && firstVisible != null) {
+        setSelectedTaskId(firstVisible);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rootTaskId, selectedTaskId, memorySel, tick, firstVisibleChildTask]);
 
   const startRun = async (goal: string) => {
     if (!repo) return;
@@ -134,9 +156,9 @@ export default function App() {
     refresh();
     // Auto-select the first child task once the planner creates one
     const selectFirst = async (retries: number) => {
-      const children = await window.grist.getChildTasks(id) as ChildTask[];
-      if (children.length > 0) {
-        setSelectedTaskId(children[0].id);
+      const firstVisible = await firstVisibleChildTask(id);
+      if (firstVisible != null) {
+        setSelectedTaskId(firstVisible);
       } else if (retries > 0) {
         setTimeout(() => void selectFirst(retries - 1), 500);
       }
@@ -237,6 +259,7 @@ export default function App() {
       )}
       {repoDialogOpen && (
         <RepoDialog
+          currentRepo={repo}
           onSelect={onRepoSelected}
           onCreateRepo={openCreateRepoDialog}
           onCancel={() => setRepoDialogOpen(false)}

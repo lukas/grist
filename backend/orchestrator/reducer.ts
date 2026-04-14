@@ -7,6 +7,36 @@ import { createProvider } from "../providers/providerFactory.js";
 import { loadAppSettings } from "../settings/appSettings.js";
 import { ReducerOutputSchema } from "../types/taskState.js";
 import { extractJsonObject } from "../providers/jsonExtract.js";
+import { tryParseModelJson } from "./workerDecisionUtils.js";
+
+const REDUCER_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "confirmed_facts",
+    "top_hypotheses",
+    "contradictions",
+    "recommended_next_tasks",
+    "open_questions",
+    "handoff_notes",
+    "overall_confidence",
+    "summary_text",
+    "final_summary",
+    "recommendation",
+  ],
+  properties: {
+    confirmed_facts: { type: "array" },
+    top_hypotheses: { type: "array" },
+    contradictions: { type: "array" },
+    recommended_next_tasks: { type: "array" },
+    open_questions: { type: "array" },
+    handoff_notes: { type: "array" },
+    overall_confidence: { type: "number" },
+    summary_text: { type: "string" },
+    final_summary: { type: "string" },
+    recommendation: { type: "string" },
+  },
+} as const;
 
 export async function runReducerPass(task: TaskRow): Promise<void> {
   const job = getJob(task.job_id);
@@ -33,13 +63,66 @@ Return JSON with keys:
 - recommendation one of: no_more_work | spawn_patch | verification_required | replan_required`;
 
   const sys = "You output only valid JSON for the summarizer schema.";
-  const resp = await provider.generateText({
+  const resp = await provider.generateStructured({
     systemPrompt: sys,
     userPrompt: prompt,
+    jsonSchema: REDUCER_JSON_SCHEMA,
     maxTokens: 4096,
     temperature: 0.1,
   });
-  const parsed = ReducerOutputSchema.parse(extractJsonObject(resp.text));
+  let parsed;
+  try {
+    parsed = ReducerOutputSchema.parse(resp.parsedJson ?? tryParseModelJson(resp.text) ?? extractJsonObject(resp.text));
+  } catch (parseError) {
+    try {
+      const repair = await provider.generateText({
+        systemPrompt: `${sys}\nRepair invalid summarizer JSON into the required schema.`,
+        userPrompt: `Repair this invalid summarizer output into valid JSON only.
+
+Schema:
+${JSON.stringify(REDUCER_JSON_SCHEMA, null, 2)}
+
+Validation / parse error:
+${String(parseError)}
+
+Invalid output:
+${resp.text.slice(0, 12000)}`,
+        jsonSchema: REDUCER_JSON_SCHEMA,
+        maxTokens: 4096,
+        temperature: 0,
+      });
+      parsed = ReducerOutputSchema.parse(tryParseModelJson(repair.text) ?? extractJsonObject(repair.text));
+      addJobTokenUsage(task.job_id, repair.tokensIn + repair.tokensOut, repair.estimatedCost);
+      insertEvent({
+        job_id: task.job_id,
+        task_id: task.id,
+        level: "warn",
+        type: "reducer_repaired",
+        message: "Recovered invalid summarizer output via repair pass",
+      });
+    } catch {
+      const fallback = ReducerOutputSchema.parse({
+        confirmed_facts: artifacts.map((artifact) => artifact.type),
+        top_hypotheses: [],
+        contradictions: [],
+        recommended_next_tasks: [],
+        open_questions: [],
+        handoff_notes: ["Summarizer output was invalid; using fallback summary built from worker artifacts."],
+        overall_confidence: 0.3,
+        summary_text: "Fallback summary generated from completed worker artifacts.",
+        final_summary: `Fallback summary: available artifacts were ${artifacts.map((artifact) => artifact.type).join(", ") || "none"}.`,
+        recommendation: "no_more_work",
+      });
+      parsed = fallback;
+      insertEvent({
+        job_id: task.job_id,
+        task_id: task.id,
+        level: "warn",
+        type: "reducer_fallback",
+        message: "Summarizer output was invalid; generated fallback final summary",
+      });
+    }
+  }
   insertArtifact({
     job_id: task.job_id,
     task_id: task.id,

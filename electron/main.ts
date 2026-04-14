@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, nativeImage } from "electron";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { openDatabase, closeDatabase, getDb } from "../backend/db/db.js";
@@ -104,6 +105,23 @@ function isGitRepoPath(dirPath: string): boolean {
   }
 }
 
+function isUnderPath(target: string, root: string): boolean {
+  const normalizedTarget = resolve(target);
+  const normalizedRoot = resolve(root);
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${sep}`);
+}
+
+function shouldShowInRecentRepos(dirPath: string): boolean {
+  if (!existsSync(dirPath) || !isGitRepoPath(dirPath)) return false;
+  const blockedRoots = [
+    "/tmp",
+    tmpdir(),
+    "/private/tmp",
+    join(app.getPath("userData"), "workspace"),
+  ];
+  return !blockedRoots.some((root) => isUnderPath(dirPath, root));
+}
+
 function registerIpc(): void {
   ipcMain.handle(IPC.ping, () => "pong");
   ipcMain.handle(IPC.dbPath, () => join(app.getPath("userData"), "grist.sqlite"));
@@ -120,7 +138,7 @@ function registerIpc(): void {
     const rows = getDb()
       .prepare("SELECT DISTINCT repo_path FROM jobs ORDER BY created_at DESC LIMIT 20")
       .all() as { repo_path: string }[];
-    return rows.map((r) => r.repo_path).filter((p) => existsSync(p));
+    return rows.map((r) => r.repo_path).filter(shouldShowInRecentRepos);
   });
 
   ipcMain.handle(IPC.repoDefaults, () => ({

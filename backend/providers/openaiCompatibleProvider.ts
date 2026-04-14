@@ -15,17 +15,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.name = name;
   }
 
-  async generateText(input: ModelRequest): Promise<ModelResponse> {
+  private async requestChatCompletion(body: Record<string, unknown>): Promise<ModelResponse> {
     const url = `${this.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const body = {
-      model: input.modelName || this.model,
-      messages: [
-        { role: "system", content: input.systemPrompt },
-        { role: "user", content: input.userPrompt },
-      ],
-      max_tokens: input.maxTokens,
-      temperature: input.temperature ?? 0.2,
-    };
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.apiKey.length > 0) headers.authorization = `Bearer ${this.apiKey}`;
     const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
@@ -49,9 +40,43 @@ export class OpenAICompatibleProvider implements ModelProvider {
     };
   }
 
+  async generateText(input: ModelRequest): Promise<ModelResponse> {
+    const body: Record<string, unknown> = {
+      model: input.modelName || this.model,
+      messages: [
+        { role: "system", content: input.systemPrompt },
+        { role: "user", content: input.userPrompt },
+      ],
+      max_tokens: input.maxTokens,
+      temperature: input.temperature ?? 0.2,
+    };
+    if (this.name === "kimi" && input.jsonSchema) {
+      body.response_format = { type: "json_object" };
+    }
+    try {
+      return await this.requestChatCompletion(body);
+    } catch (error) {
+      if (!(this.name === "kimi" && input.jsonSchema && /HTTP 4\d\d:/i.test(String(error)))) {
+        throw error;
+      }
+      delete body.response_format;
+      return this.requestChatCompletion(body);
+    }
+  }
+
   async generateStructured(input: ModelRequest): Promise<ModelResponse> {
-    const prompt =
-      input.userPrompt + "\n\nReturn a single JSON object matching the schema. No markdown fences.";
+    const schemaHint = input.jsonSchema
+      ? `Schema:\n${JSON.stringify(input.jsonSchema, null, 2)}`
+      : "";
+    const prompt = [
+      input.userPrompt,
+      "",
+      "Return exactly one JSON object.",
+      "Do not use markdown fences.",
+      "Do not add prose before or after the JSON.",
+      "Do not invent action names outside the schema.",
+      schemaHint,
+    ].filter(Boolean).join("\n");
     const r = await this.generateText({ ...input, userPrompt: prompt });
     const parsed = extractJsonObject(r.text);
     return { ...r, parsedJson: parsed };

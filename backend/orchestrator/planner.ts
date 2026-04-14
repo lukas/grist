@@ -349,11 +349,34 @@ function ensureSummarizer(plan: ManagerPlan): ManagerPlan {
   };
 }
 
+function dropRedundantPlannedVerifiers(plan: ManagerPlan): ManagerPlan {
+  const hasImplementer = plan.tasks.some((task) => task.role === "implementer");
+  const hasVerifier = plan.tasks.some((task) => task.role === "verifier");
+  if (!hasImplementer || !hasVerifier) return plan;
+
+  const keptIndices = plan.tasks
+    .map((task, index) => ({ task, index }))
+    .filter(({ task }) => task.role !== "verifier");
+  const indexMap = new Map<number, number>();
+  keptIndices.forEach(({ index }, newIndex) => indexMap.set(index, newIndex));
+
+  return {
+    ...plan,
+    reasoning: `${plan.reasoning} [Dropped manager-planned verifier tasks because implementers already trigger verifier follow-ups.]`,
+    tasks: keptIndices.map(({ task }) => ({
+      ...task,
+      depends_on: (task.depends_on || [])
+        .filter((dep) => indexMap.has(dep))
+        .map((dep) => indexMap.get(dep) as number),
+    })),
+  };
+}
+
 function validateParallelism(plan: ManagerPlan, isEmpty: boolean, fileCount: number): ManagerPlan {
   const tasks = plan.tasks;
   if (tasks.length <= 1) return plan;
 
-  let adjusted = ensureSummarizer(plan);
+  let adjusted = ensureSummarizer(dropRedundantPlannedVerifiers(plan));
 
   if (adjusted.tasks.length > 7) {
     adjusted = {

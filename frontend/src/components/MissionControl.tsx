@@ -69,6 +69,7 @@ export function MissionControl({
   const shortRepo = repo
     ? repo.split("/").slice(-2).join("/")
     : "repo…";
+  const visibleRecentRepos = recentRepos.filter((r) => r !== repo);
 
   return (
     <header className="flex items-center gap-2 border-b border-border/50 bg-[#0e1420] px-3 py-1.5 text-xs">
@@ -96,10 +97,10 @@ export function MissionControl({
               </div>
             )}
 
-            {recentRepos.length > 0 && (
+            {visibleRecentRepos.length > 0 && (
               <div className="max-h-48 overflow-auto py-1">
                 <div className="px-3 py-0.5 text-[10px] uppercase tracking-wide text-muted">Recent</div>
-                {recentRepos.map((r) => (
+                {visibleRecentRepos.map((r) => (
                   <button
                     key={r}
                     type="button"
