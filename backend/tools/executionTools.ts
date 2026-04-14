@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { join, isAbsolute, normalize } from "node:path";
 import type { ToolContext, ToolResult } from "./toolTypes.js";
 import { buildRuntimeWrappedCommand } from "../runtime/taskRuntime.js";
 
@@ -148,6 +149,14 @@ function normalizeCommandForRuntime(command: string, ctx: ToolContext): string {
     .replace(new RegExp(`^cd\\s+(?:"${workdir}"|'${workdir}'|${workdir})\\s*(?:&&|;)\\s*`), "");
 }
 
+function resolveCommandCwd(ctx: ToolContext, cwd?: string): string {
+  const base = ctx.worktreePath || ctx.repoPath;
+  if (!cwd || cwd.trim() === "") return base;
+  const trimmed = cwd.trim();
+  if (trimmed === ".") return base;
+  return isAbsolute(trimmed) ? trimmed : normalize(join(base, trimmed));
+}
+
 function runWithTimeout(
   command: string,
   cwd: string,
@@ -188,7 +197,7 @@ export async function toolRunCommandSafe(
   abortSignal?: AbortSignal
 ): Promise<ToolResult> {
   const timeoutMs = args.timeoutMs ?? 60_000;
-  const cwd = args.cwd ? args.cwd : (ctx.worktreePath || ctx.repoPath);
+  const cwd = resolveCommandCwd(ctx, args.cwd);
   const normalizedCommand = normalizeCommandForRuntime(args.command, ctx);
   if (!isAllowed(normalizedCommand, ctx.commandAllowlist)) {
     return { ok: false, error: `Command not in allowlist: ${args.command}` };
@@ -225,5 +234,6 @@ export const __executionToolInternals = {
   hasTopLevelShellSyntax,
   isAllowed,
   normalizeCommandForRuntime,
+  resolveCommandCwd,
   splitTopLevelCommands,
 };

@@ -109,6 +109,38 @@ Persisted per-task metadata includes:
 - `worktree_path`
 - `runtime_json`
 
+## Memory Strategy
+
+Grist treats memory as a persisted cross-task aid, not just prompt-local context.
+
+There are four durable memory surfaces:
+
+- project summary: `<repo>/.grist/summary.md`
+- global summary: `~/.grist/summary.md`
+- project memory notes: `<repo>/.grist/memory/*.md`
+- global memory notes: `~/.grist/memory/*.md`
+
+Current policy:
+
+- workers can explicitly call `read_memory` and `write_memory`
+- project-scoped memory is the default; global memory is only for reusable cross-project lessons
+- every completed task also gets an asynchronous reflection pass that writes at least one project memory note
+- reflections may additionally update the project/global summaries when the higher-level understanding of the repo changes
+- successful verification can trigger a wrap-up implementer specifically to clean up, document, prepare PR context, and write durable memory
+
+Prompt injection is budgeted rather than dumping all prior notes:
+
+- repo summary gets highest priority
+- global summary is next
+- remaining prompt budget is used for short snippets from relevant memory notes
+- note snippets are ranked by keyword overlap with the current task goal, with recency as a tiebreaker
+- the UI can show the full memory corpus, but worker prompt context stays compact
+
+This makes memory partly explicit and partly automatic:
+
+- explicit via tool calls when an agent notices something worth preserving
+- automatic via post-task reflection so useful lessons are still captured even if the worker never wrote memory directly
+
 ## Failure / Recovery Strategy
 
 The system distinguishes core delivery from auxiliary failures.
@@ -139,6 +171,7 @@ Strengths:
 
 - explicit typed roles
 - durable task/artifact/event history
+- durable project/global memory with both agent-written and reflection-written notes
 - isolated writable workspaces
 - clear dependency-based scheduling
 - good operator inspectability

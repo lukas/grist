@@ -92,7 +92,7 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 |-----------|----------|
 | `App.tsx` | State: `rootTaskId`, `selectedTaskId`. Uses `createTask`/`startTask` to run. |
 | `MissionControl` | Header bar. Repo picker, provider dot, Skills button, pause/resume/stop via `rootTaskControl`. Repo dropdown includes `New repo…` and `Browse…`. |
-| `TaskList` | Left sidebar. Root tasks as expandable nodes, child tasks as tree. Filters out `root`/`planner` kinds. Task blocker `!` now shows an explicit hover tooltip with the issue text. |
+| `TaskList` | Left sidebar. Root tasks as expandable nodes, child tasks as tree. Filters out `root`/`planner` kinds. Task blocker `!` uses a single custom tooltip (no native `title` hover) and remains keyboard-focusable. |
 | `TaskDetail` | Main panel. Chat-style event view with operator message input. Loads events via `getEventsForTask(taskId)`. |
 | `SkillsModal` | Browse bundled skills, install/remove global + project skills. |
 

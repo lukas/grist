@@ -20,6 +20,48 @@ function depsSatisfied(task: TaskRow, byId: Map<number, TaskRow>): boolean {
   });
 }
 
+function artifactTypesByTaskId(jobId: number, taskIds: number[]): Map<number, Set<string>> {
+  const rows = listArtifactsForTasks(jobId, taskIds) as Array<{ task_id: number | null; type: string }>;
+  const byTaskId = new Map<number, Set<string>>();
+  for (const row of rows) {
+    if (row.task_id == null) continue;
+    const types = byTaskId.get(row.task_id) || new Set<string>();
+    types.add(row.type);
+    byTaskId.set(row.task_id, types);
+  }
+  return byTaskId;
+}
+
+function reducerDepsSatisfied(
+  task: TaskRow,
+  byId: Map<number, TaskRow>,
+  artifactsByTaskId: Map<number, Set<string>>,
+): boolean {
+  const deps = JSON.parse(task.dependencies_json || "[]") as number[];
+  if (deps.length === 0) return true;
+  const terminal = new Set(["done", "completed", "failed", "stopped"]);
+  return deps.every((id) => {
+    const dep = byId.get(id);
+    if (!dep || !terminal.has(dep.status)) return false;
+    if (!["done", "completed"].includes(dep.status)) return true;
+    if (!dep.artifact_type) return true;
+    return artifactsByTaskId.get(id)?.has(dep.artifact_type) === true;
+  });
+}
+
+function reducerCanRun(jobId: number, task: TaskRow, tasks: TaskRow[], byId: Map<number, TaskRow>): boolean {
+  const otherActiveWork = tasks.some((candidate) =>
+    candidate.id !== task.id
+    && schedulable(candidate)
+    && candidate.kind !== "reducer"
+    && ["queued", "ready", "running", "blocked", "paused"].includes(candidate.status)
+  );
+  if (otherActiveWork) return false;
+  const depIds = JSON.parse(task.dependencies_json || "[]") as number[];
+  const artifacts = artifactTypesByTaskId(jobId, depIds);
+  return reducerDepsSatisfied(task, byId, artifacts);
+}
+
 function schedulable(t: TaskRow): boolean {
   return !NON_SCHEDULABLE_KINDS.has(t.kind);
 }
@@ -164,7 +206,10 @@ export function runSchedulerTick(jobId: number, hooks: SchedulerHooks): void {
   for (const t of tasks) {
     if (t.status === "blocked" && schedulable(t)) {
       const m = new Map(listTasksForJob(jobId).map((x) => [x.id, x]));
-      if (depsSatisfied(t, m)) {
+      const ready = t.kind === "reducer"
+        ? reducerCanRun(jobId, t, listTasksForJob(jobId), m)
+        : depsSatisfied(t, m);
+      if (ready) {
         updateTask(t.id, {
           status: "queued",
           blocker: "",
@@ -187,7 +232,10 @@ export function runSchedulerTick(jobId: number, hooks: SchedulerHooks): void {
   tasks = listTasksForJob(jobId);
   const byIdReady = new Map(tasks.map((x) => [x.id, x]));
   for (const t of tasks) {
-    if (t.status === "queued" && schedulable(t) && depsSatisfied(t, byIdReady)) {
+    const ready = t.kind === "reducer"
+      ? reducerCanRun(jobId, t, tasks, byIdReady)
+      : depsSatisfied(t, byIdReady);
+    if (t.status === "queued" && schedulable(t) && ready) {
       updateTask(t.id, { status: "ready", next_action: "launch" });
     }
   }

@@ -220,6 +220,7 @@ function describeRoleContract(role: WorkerRole): string {
 - Use run_command_safe / run_tests for validation. Do not manage Docker manually unless the task is explicitly about creating container setup files.
 - If Grist already attached a runtime, do not prepend commands with \`cd /workspace &&\`; use the normal repo cwd and let Grist map it into the runtime.
 - Prefer Grist repo tools ("list_files", "read_file", "grep_code") over shell probes like "pwd", "ls", or version checks unless the shell output itself is the thing you need.
+- In a new Node/TypeScript repo, install dependencies before running build/typecheck commands so you do not waste steps on missing local binaries like \`tsc\`.
 - Read existing artifacts first when useful, then implement, then run focused validation commands when possible.
 - Finish with artifact type "candidate_patch" containing: diff_summary, files_changed, tests_added, migration_notes.`;
     case "reviewer":

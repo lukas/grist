@@ -31,14 +31,22 @@ export function toolWriteFile(ctx: ToolContext, args: { path: string; content: s
   }
 }
 
-export function toolApplyPatch(ctx: ToolContext, args: { diff: string }): ToolResult {
+export function toolApplyPatch(ctx: ToolContext, args: { diff?: string; patch?: string }): ToolResult {
   if (!ctx.worktreePath) return { ok: false, error: "No worktree — patch forbidden" };
   try {
-    for (const file of extractPatchFiles(args.diff)) {
+    const diff = typeof args.diff === "string" && args.diff.trim()
+      ? args.diff
+      : typeof args.patch === "string" && args.patch.trim()
+        ? args.patch
+        : "";
+    if (!diff) {
+      return { ok: false, error: "apply_patch requires a non-empty diff or patch string" };
+    }
+    for (const file of extractPatchFiles(diff)) {
       assertPathInScope(ctx, file);
     }
     const patchFile = join(ctx.worktreePath, ".grist_patch.diff");
-    writeFileSync(patchFile, args.diff, "utf8");
+    writeFileSync(patchFile, diff, "utf8");
     const r = spawnSync("git", ["apply", patchFile], { cwd: ctx.worktreePath, encoding: "utf8", timeout: 60_000 });
     if (r.status !== 0) {
       return { ok: false, error: r.stderr || r.stdout || "git apply failed" };

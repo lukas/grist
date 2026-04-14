@@ -57,12 +57,10 @@ function gitLines(worktreePath: string, args: string[]): { ok: boolean; lines: s
   return { ok: true, lines, stderr: "" };
 }
 
-function getTrackedChanges(worktreePath: string): { ok: boolean; copy: string[]; remove: string[]; stderr: string } {
-  const res = gitLines(worktreePath, ["diff", "--name-status", "HEAD"]);
-  if (!res.ok) return { ok: false, copy: [], remove: [], stderr: res.stderr };
+function collectNameStatusChanges(lines: string[]): { copy: string[]; remove: string[] } {
   const copy = new Set<string>();
   const remove = new Set<string>();
-  for (const line of res.lines) {
+  for (const line of lines) {
     const parts = line.split("\t").filter(Boolean);
     const status = parts[0] || "";
     if (status.startsWith("R") || status.startsWith("C")) {
@@ -77,7 +75,26 @@ function getTrackedChanges(worktreePath: string): { ok: boolean; copy: string[];
     if (status.startsWith("D")) remove.add(filePath);
     else copy.add(filePath);
   }
-  return { ok: true, copy: Array.from(copy), remove: Array.from(remove), stderr: "" };
+  return { copy: Array.from(copy), remove: Array.from(remove) };
+}
+
+function getRepoHead(repoRoot: string): { ok: boolean; head: string; stderr: string } {
+  const r = spawnSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 60_000 });
+  if (r.status !== 0) {
+    return { ok: false, head: "", stderr: (r.stderr || r.stdout || "git rev-parse failed").toString() };
+  }
+  return { ok: true, head: (r.stdout || "").toString().trim(), stderr: "" };
+}
+
+function getTrackedChanges(repoRoot: string, worktreePath: string): { ok: boolean; copy: string[]; remove: string[]; stderr: string } {
+  const uncommitted = gitLines(worktreePath, ["diff", "--name-status", "HEAD"]);
+  if (!uncommitted.ok) return { ok: false, copy: [], remove: [], stderr: uncommitted.stderr };
+  const repoHead = getRepoHead(repoRoot);
+  if (!repoHead.ok) return { ok: false, copy: [], remove: [], stderr: repoHead.stderr };
+  const committed = gitLines(worktreePath, ["diff", "--name-status", `${repoHead.head}..HEAD`]);
+  if (!committed.ok) return { ok: false, copy: [], remove: [], stderr: committed.stderr };
+  const merged = collectNameStatusChanges([...committed.lines, ...uncommitted.lines]);
+  return { ok: true, copy: merged.copy, remove: merged.remove, stderr: "" };
 }
 
 function getUntrackedChanges(worktreePath: string): { ok: boolean; files: string[]; stderr: string } {
@@ -94,7 +111,7 @@ export function syncWorktreeToRepo(
   repoRoot: string,
   worktreePath: string
 ): { ok: boolean; copied: string[]; removed: string[]; skipped: string[]; stderr: string } {
-  const tracked = getTrackedChanges(worktreePath);
+  const tracked = getTrackedChanges(repoRoot, worktreePath);
   if (!tracked.ok) {
     return { ok: false, copied: [], removed: [], skipped: [], stderr: tracked.stderr };
   }

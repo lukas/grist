@@ -71,4 +71,84 @@ describe("planner greenfield guardrails", () => {
     expect(prompt.system).toContain("Default to exactly one implementer");
     expect(prompt.system).toContain("runnable vertical slice");
   });
+
+  it("bumps greenfield implementer step budgets to reduce repair churn", () => {
+    const plan: ManagerPlan = {
+      reasoning: "One writer is enough.",
+      accepted_assumptions: [],
+      parallelism_notes: [],
+      tasks: [
+        {
+          role: "implementer",
+          goal: "Build the chess app.",
+          packet: {
+            files: [],
+            area: "app",
+            workflow_phase: "",
+            acceptance_criteria: [],
+            non_goals: [],
+            similar_patterns: [],
+            constraints: [],
+            commands_allowed: [],
+            success_criteria: [],
+          },
+          max_steps: 20,
+          depends_on: [],
+        },
+      ],
+    };
+
+    const adjusted = __plannerInternals.validateParallelism(plan, "Build a chess app.", true, 0);
+
+    expect(adjusted.tasks[0]?.max_steps).toBe(40);
+  });
+
+  it("drops scout tasks in empty repos to save wall-clock time", () => {
+    const plan: ManagerPlan = {
+      reasoning: "Scout first, then implement.",
+      accepted_assumptions: [],
+      parallelism_notes: [],
+      tasks: [
+        {
+          role: "scout",
+          goal: "Inspect the repo.",
+          packet: {
+            files: [],
+            area: "repo",
+            workflow_phase: "",
+            acceptance_criteria: [],
+            non_goals: [],
+            similar_patterns: [],
+            constraints: [],
+            commands_allowed: [],
+            success_criteria: [],
+          },
+          max_steps: 10,
+          depends_on: [],
+        },
+        {
+          role: "implementer",
+          goal: "Build the chess app.",
+          packet: {
+            files: [],
+            area: "app",
+            workflow_phase: "",
+            acceptance_criteria: [],
+            non_goals: [],
+            similar_patterns: [],
+            constraints: [],
+            commands_allowed: [],
+            success_criteria: [],
+          },
+          max_steps: 20,
+          depends_on: [0],
+        },
+      ],
+    };
+
+    const adjusted = __plannerInternals.validateParallelism(plan, "Build a chess app.", true, 0);
+
+    expect(adjusted.tasks.some((task) => task.role === "scout")).toBe(false);
+    expect(adjusted.tasks.some((task) => task.role === "implementer")).toBe(true);
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const NON_DISPLAY_KINDS = new Set(["root", "planner"]);
@@ -263,6 +263,7 @@ function IssueTooltipBadge({ blockerText }: { blockerText: string }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const iconRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipId = useId();
 
   useEffect(() => {
     if (!open) return;
@@ -291,8 +292,9 @@ function IssueTooltipBadge({ blockerText }: { blockerText: string }) {
         <span
           ref={iconRef}
           className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-900/50 text-[10px] font-bold text-amber-300 ring-1 ring-amber-700/60"
-          title={`Issue: ${blockerText}`}
           aria-label={`Issue: ${blockerText}`}
+          aria-describedby={open ? tooltipId : undefined}
+          tabIndex={0}
           onMouseEnter={() => setOpen(true)}
           onMouseLeave={() => setOpen(false)}
           onFocus={() => setOpen(true)}
@@ -304,6 +306,8 @@ function IssueTooltipBadge({ blockerText }: { blockerText: string }) {
       {open &&
         createPortal(
           <div
+            id={tooltipId}
+            role="tooltip"
             className="pointer-events-none fixed z-50 w-64 -translate-x-full rounded border border-amber-700/60 bg-[#1a2233] px-2 py-1.5 text-left text-[11px] leading-snug text-amber-200 shadow-xl"
             style={{ top: position.top, left: position.left }}
           >

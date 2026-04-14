@@ -99,6 +99,7 @@ Installed skills become visible to workers through the read-only tools `list_ski
 - **Wrap-up git/PR commands**: default safe-command allowlist now includes the git/`gh` subset needed for PR-oriented wrap-up passes
 - **Verifier fallback checks**: verifiers now choose from available `test`, `build`, and startup-smoke commands instead of always defaulting to `npm test`, and they do not fail solely because a CLI project lacks a test script
 - **Runtime command normalization**: runtime-backed safe commands now strip redundant `cd /workspace && ...` prefixes before allowlist/execution
+- **Cleaner blocker hovers**: task-tree `!` badges use only the custom tooltip now, avoiding the duplicate native browser hover bubble
 
 ## Spec
 

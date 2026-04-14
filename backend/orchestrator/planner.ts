@@ -306,11 +306,45 @@ function dropRedundantPlannedVerifiers(plan: ManagerPlan): ManagerPlan {
   };
 }
 
-function validateParallelism(plan: ManagerPlan, goal: string, isEmpty: boolean, fileCount: number): ManagerPlan {
-  const tasks = plan.tasks;
-  if (tasks.length <= 1) return plan;
+function dropGreenfieldScouts(plan: ManagerPlan): ManagerPlan {
+  const hasScout = plan.tasks.some((task) => task.role === "scout");
+  if (!hasScout) return plan;
+  const keptIndices = plan.tasks
+    .map((task, index) => ({ task, index }))
+    .filter(({ task }) => task.role !== "scout");
+  const indexMap = new Map<number, number>();
+  keptIndices.forEach(({ index }, newIndex) => indexMap.set(index, newIndex));
+  return {
+    ...plan,
+    reasoning: `${plan.reasoning} [Dropped greenfield scout tasks because an empty repo has no existing code to inspect and the implementer can bootstrap directly.]`,
+    tasks: keptIndices.map(({ task }) => ({
+      ...task,
+      depends_on: (task.depends_on || [])
+        .filter((dep) => indexMap.has(dep))
+        .map((dep) => indexMap.get(dep) as number),
+    })),
+  };
+}
 
-  let adjusted = ensureSummarizer(dropRedundantPlannedVerifiers(plan));
+function validateParallelism(plan: ManagerPlan, goal: string, isEmpty: boolean, fileCount: number): ManagerPlan {
+  let adjusted = plan;
+
+  if (isEmpty) {
+    adjusted = dropGreenfieldScouts(adjusted);
+    adjusted = {
+      ...adjusted,
+      tasks: adjusted.tasks.map((task) =>
+        task.role === "implementer"
+          ? { ...task, max_steps: Math.max(task.max_steps || 20, 40) }
+          : task
+      ),
+    };
+  }
+
+  const tasks = adjusted.tasks;
+  if (tasks.length <= 1) return adjusted;
+
+  adjusted = ensureSummarizer(dropRedundantPlannedVerifiers(adjusted));
 
   if (isEmpty) {
     const implementers = adjusted.tasks.filter((t) => t.role === "implementer");

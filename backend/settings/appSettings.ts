@@ -31,6 +31,7 @@ const DEFAULT_ALLOWLIST = [
   "timeout", "env", "xargs", "sort", "uniq", "grep", "awk", "sed",
   "tsc", "eslint", "prettier", "rustfmt", "cargo fmt", "cargo clippy",
   "pip install", "npm install", "pnpm install", "yarn install",
+  "npm init -y", "yarn init -y", "pnpm init",
 ];
 
 function pick<T>(dbVal: T | undefined, envVal: T | undefined): T | undefined {

@@ -56,6 +56,22 @@ describe("executionTools runtime normalization", () => {
     expect(__executionToolInternals.splitTopLevelCommands("pwd && ls -la")).toEqual(["pwd", "ls -la"]);
     expect(__executionToolInternals.splitTopLevelCommands("git diff | head")).toEqual(["git diff", "head"]);
   });
+
+  it("resolves relative cwd against the worktree", () => {
+    const resolved = __executionToolInternals.resolveCommandCwd(
+      makeCtx({
+        mode: "host",
+        status: "unavailable",
+        strategy: "none",
+        supportsExec: false,
+        hostPorts: {},
+        serviceUrls: [],
+      }),
+      ".",
+    );
+
+    expect(resolved).toBe("/tmp/repo");
+  });
 });
 
 const ctxBase: Omit<ToolContext, "emit"> = {

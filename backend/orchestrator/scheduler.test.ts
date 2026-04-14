@@ -3,7 +3,7 @@ import { openDatabase, closeDatabase, resetDbSingleton } from "../db/db.js";
 import { insertJob } from "../db/jobRepo.js";
 import { insertTask, updateTask, listTasksForJob } from "../db/taskRepo.js";
 import { insertArtifact } from "../db/artifactRepo.js";
-import { depsSatisfied, terminalJobOutcome } from "./scheduler.js";
+import { depsSatisfied, runSchedulerTick, terminalJobOutcome } from "./scheduler.js";
 import type { TaskRow } from "../db/taskRepo.js";
 
 describe("depsSatisfied", () => {
@@ -373,5 +373,212 @@ describe("terminalJobOutcome", () => {
       status: "completed",
       softFailedTaskIds: [],
     });
+  });
+});
+
+describe("reducer scheduling", () => {
+  beforeEach(() => {
+    resetDbSingleton();
+    openDatabase(":memory:");
+  });
+
+  afterEach(() => {
+    closeDatabase();
+    resetDbSingleton();
+  });
+
+  it("keeps summarizer blocked until implementer artifact exists", () => {
+    const jobId = insertJob({
+      repo_path: "/tmp/r",
+      user_goal: "test",
+      operator_notes: "",
+      status: "running",
+      selected_execution_mode: "local",
+      default_model_provider: "mock",
+      planner_model_provider: "mock",
+      reducer_model_provider: "mock",
+      verifier_model_provider: "mock",
+    });
+    const implementerId = insertTask({
+      job_id: jobId,
+      parent_task_id: null,
+      kind: "patch_writer",
+      role: "implementer",
+      goal: "build",
+      scope_json: "{}",
+      status: "done",
+      priority: 10,
+      assigned_model_provider: "mock",
+      write_mode: "worktree",
+      workspace_repo_mode: "isolated_worktree",
+      scratchpad_path: "/tmp/i.md",
+      worktree_path: "/tmp/w",
+      git_branch: "",
+      base_ref: "",
+      runtime_json: "{}",
+      max_steps: 20,
+      max_tokens: 1000,
+      current_action: "finished",
+      next_action: "",
+      blocker: "",
+      confidence: 0,
+      files_examined_json: "[]",
+      findings_json: "[]",
+      open_questions_json: "[]",
+      dependencies_json: "[]",
+      allowed_tools_json: "[]",
+      artifact_type: "candidate_patch",
+    });
+    const reducerId = insertTask({
+      job_id: jobId,
+      parent_task_id: null,
+      kind: "reducer",
+      role: "summarizer",
+      goal: "summarize",
+      scope_json: "{}",
+      status: "blocked",
+      priority: 1,
+      assigned_model_provider: "mock",
+      write_mode: "none",
+      workspace_repo_mode: "shared_read_only",
+      scratchpad_path: "/tmp/r.md",
+      worktree_path: null,
+      git_branch: "",
+      base_ref: "",
+      runtime_json: "{}",
+      max_steps: 8,
+      max_tokens: 1000,
+      current_action: "blocked",
+      next_action: "",
+      blocker: "waiting for dependencies",
+      confidence: 0,
+      files_examined_json: "[]",
+      findings_json: "[]",
+      open_questions_json: "[]",
+      dependencies_json: JSON.stringify([implementerId]),
+      allowed_tools_json: "[]",
+      artifact_type: "final_summary",
+    });
+
+    runSchedulerTick(jobId, { onStartWorker: () => {} });
+
+    const tasks = listTasksForJob(jobId);
+    expect(tasks.find((task) => task.id === reducerId)?.status).toBe("blocked");
+  });
+
+  it("keeps summarizer blocked while other non-reducer work is still active", () => {
+    const jobId = insertJob({
+      repo_path: "/tmp/r",
+      user_goal: "test",
+      operator_notes: "",
+      status: "running",
+      selected_execution_mode: "local",
+      default_model_provider: "mock",
+      planner_model_provider: "mock",
+      reducer_model_provider: "mock",
+      verifier_model_provider: "mock",
+    });
+    const implementerId = insertTask({
+      job_id: jobId,
+      parent_task_id: null,
+      kind: "patch_writer",
+      role: "implementer",
+      goal: "build",
+      scope_json: "{}",
+      status: "done",
+      priority: 10,
+      assigned_model_provider: "mock",
+      write_mode: "worktree",
+      workspace_repo_mode: "isolated_worktree",
+      scratchpad_path: "/tmp/i.md",
+      worktree_path: "/tmp/w",
+      git_branch: "",
+      base_ref: "",
+      runtime_json: "{}",
+      max_steps: 20,
+      max_tokens: 1000,
+      current_action: "finished",
+      next_action: "",
+      blocker: "",
+      confidence: 0,
+      files_examined_json: "[]",
+      findings_json: "[]",
+      open_questions_json: "[]",
+      dependencies_json: "[]",
+      allowed_tools_json: "[]",
+      artifact_type: "candidate_patch",
+    });
+    insertArtifact({
+      job_id: jobId,
+      task_id: implementerId,
+      type: "candidate_patch",
+      content_json: "{}",
+      confidence: 0.7,
+    });
+    insertTask({
+      job_id: jobId,
+      parent_task_id: implementerId,
+      kind: "verifier",
+      role: "verifier",
+      goal: "verify",
+      scope_json: "{}",
+      status: "running",
+      priority: 9,
+      assigned_model_provider: "mock",
+      write_mode: "none",
+      workspace_repo_mode: "shared_read_only",
+      scratchpad_path: "/tmp/v.md",
+      worktree_path: "/tmp/w",
+      git_branch: "",
+      base_ref: "",
+      runtime_json: "{}",
+      max_steps: 2,
+      max_tokens: 1000,
+      current_action: "verifying",
+      next_action: "",
+      blocker: "",
+      confidence: 0,
+      files_examined_json: "[]",
+      findings_json: "[]",
+      open_questions_json: "[]",
+      dependencies_json: JSON.stringify([implementerId]),
+      allowed_tools_json: "[]",
+      artifact_type: "verification_result",
+    });
+    const reducerId = insertTask({
+      job_id: jobId,
+      parent_task_id: null,
+      kind: "reducer",
+      role: "summarizer",
+      goal: "summarize",
+      scope_json: "{}",
+      status: "blocked",
+      priority: 1,
+      assigned_model_provider: "mock",
+      write_mode: "none",
+      workspace_repo_mode: "shared_read_only",
+      scratchpad_path: "/tmp/r.md",
+      worktree_path: null,
+      git_branch: "",
+      base_ref: "",
+      runtime_json: "{}",
+      max_steps: 8,
+      max_tokens: 1000,
+      current_action: "blocked",
+      next_action: "",
+      blocker: "waiting for dependencies",
+      confidence: 0,
+      files_examined_json: "[]",
+      findings_json: "[]",
+      open_questions_json: "[]",
+      dependencies_json: JSON.stringify([implementerId]),
+      allowed_tools_json: "[]",
+      artifact_type: "final_summary",
+    });
+
+    runSchedulerTick(jobId, { onStartWorker: () => {} });
+
+    const tasks = listTasksForJob(jobId);
+    expect(tasks.find((task) => task.id === reducerId)?.status).toBe("blocked");
   });
 });

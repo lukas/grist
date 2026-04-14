@@ -246,7 +246,9 @@ export async function runVerifierPass(
       { command: validation.command, cwd: effectiveWorktree, timeoutMs: validation.timeoutMs },
       signal
     );
-    validationResults.push(summarizeOutcome(validation, result));
+    const outcome = summarizeOutcome(validation, result);
+    validationResults.push(outcome);
+    if (outcome.status === "failed") break;
   }
 
   const settings = loadAppSettings();
