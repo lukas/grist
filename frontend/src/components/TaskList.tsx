@@ -63,10 +63,10 @@ export function TaskList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto text-xs">
-      <h2 className="shrink-0 pb-1 font-semibold text-white">Tasks</h2>
+      <h2 className="shrink-0 pb-1 font-semibold text-white">Episodes</h2>
 
       {allRootTasks.length === 0 && (
-        <p className="text-muted">No tasks yet. Enter a goal and run.</p>
+        <p className="text-muted">No runs yet. Enter a goal and run.</p>
       )}
 
       {allRootTasks.map((rt) => {
@@ -176,7 +176,7 @@ function TaskNode({
       <TreeNode
         label={taskDisplayLabel(task)}
         sublabel={taskSublabel(task)}
-        status={task.status}
+        status={task.episode_is_root ? task.episode_status : task.status}
         isSelected={isSelected}
         hasToggle={hasChildren}
         isOpen={open}
@@ -339,6 +339,18 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function taskSublabel(t: ChildTask): string {
+  if (t.episode_is_root) {
+    const parts = [phaseLabel(t.episode_phase)];
+    if (t.episode_attempt != null) parts.push(`attempt ${t.episode_attempt}`);
+    if (t.status === "running" && t.current_action) {
+      parts.push(actionLabel(t.current_action));
+    } else {
+      const runtime = parseRuntimeStatus(t.runtime_json);
+      if (runtime) parts.push(runtime);
+      if (t.steps_used > 0) parts.push(`${t.steps_used}/${t.max_steps} steps`);
+    }
+    return parts.filter(Boolean).join(" · ");
+  }
   if (t.status === "running" && t.current_action) {
     const runtime = parseRuntimeStatus(t.runtime_json);
     return runtime ? `${actionLabel(t.current_action)} · ${runtime}` : actionLabel(t.current_action);
@@ -368,13 +380,33 @@ function actionLabel(action: string): string {
 }
 
 function taskDisplayLabel(task: ChildTask): string {
-  if (task.role === "summarizer") return "summary";
-  if (task.role === "verifier" && task.parent_task_id != null) return "verification";
-  return task.role;
+  if (task.episode_is_root && task.episode_label) return task.episode_label;
+  return phaseLabel(task.episode_phase);
 }
 
 function taskKindLabel(kind: string): string {
   if (kind === "reducer") return "summary";
   if (kind === "patch_writer") return "implementation";
   return kind;
+}
+
+function phaseLabel(phase: string): string {
+  switch (phase) {
+    case "discover":
+      return "discover";
+    case "implement":
+      return "implement";
+    case "verify":
+      return "verify";
+    case "repair":
+      return "repair";
+    case "wrapup":
+      return "wrap-up";
+    case "review":
+      return "review";
+    case "summarize":
+      return "summary";
+    default:
+      return phase || "task";
+  }
 }

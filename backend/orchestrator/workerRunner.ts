@@ -18,8 +18,7 @@ import { runReducerPass } from "./reducer.js";
 import { runVerifierPass } from "./verifier.js";
 import { appendTaskLog } from "../logging/taskLogger.js";
 import { execSync } from "node:child_process";
-import { ensureHomeMemory, ensureRepoMemory, collectMemoryContext } from "../memory/memoryManager.js";
-import { runReflection } from "./reflection.js";
+import { ensureHomeMemory, ensureRepoMemory } from "../memory/memoryManager.js";
 import { buildSkillIndex } from "../skills/skillManager.js";
 import { parseTaskRuntime } from "../runtime/taskRuntime.js";
 import {
@@ -27,6 +26,8 @@ import {
   tryParseModelJson,
   WORKER_DECISION_JSON_SCHEMA,
 } from "./workerDecisionUtils.js";
+import { extractViolationFromToolError, parseWorkerPacket, taskContract } from "../services/contractService.js";
+import { getWorkerContext, getRepairContext } from "../services/memoryService.js";
 
 /* ─── Three-tier context compaction (inspired by Claude Code + OpenHands) ─── */
 
@@ -155,7 +156,10 @@ function buildToolContext(
 ): ToolContext {
   const t = task;
   const allowed = JSON.parse(t.allowed_tools_json) as string[];
-  const scope = safeParseScope(t.scope_json);
+  const packet = parseWorkerPacket(t.scope_json, isWorkerRole(t.role) ? t.role : undefined);
+  const scope = packet.contract_json.file_ownership.length > 0
+    ? { files: packet.contract_json.file_ownership }
+    : safeParseScope(t.scope_json);
   const worktree = t.worktree_path || (t.write_mode !== "none" && t.workspace_repo_mode !== "isolated_worktree" ? jobRepoPath : null);
   const runtime = parseTaskRuntime(t.runtime_json);
   return {
@@ -164,6 +168,7 @@ function buildToolContext(
     repoPath: jobRepoPath,
     worktreePath: worktree,
     scopeFiles: scope.files,
+    scopeJson: t.scope_json,
     scratchpadPath: t.scratchpad_path,
     appWorkspaceRoot,
     allowedToolNames: allowed,
@@ -193,11 +198,7 @@ function safeParseScope(scopeJson: string): { files?: string[] } {
 }
 
 function safeParsePacket(scopeJson: string): import("../types/taskState.js").WorkerPacket {
-  try {
-    return WorkerPacketSchema.parse(JSON.parse(scopeJson || "{}"));
-  } catch {
-    return WorkerPacketSchema.parse({});
-  }
+  return parseWorkerPacket(scopeJson);
 }
 
 function isWorkerRole(role: string): role is WorkerRole {
@@ -368,6 +369,9 @@ export async function runTaskWorker(
     const canWrite = allowed.includes("write_file");
     const skillContext = buildSkillIndex(repoPath);
     const packet = safeParsePacket(task.scope_json);
+    const memoryContext = packet.workflow_phase === "wrapup"
+      ? getRepairContext(repoPath, task.goal).memoryContext
+      : getWorkerContext(repoPath, task.goal).memoryContext;
     const typedRole = isWorkerRole(task.role) ? task.role : null;
     const runtime = parseTaskRuntime(task.runtime_json);
     const roleContract = typedRole ? describeRoleContract(typedRole) : `Role contract: complete the task using the allowed tools and finish with a structured artifact when appropriate.`;
@@ -404,8 +408,7 @@ IMPORTANT:
 - If a write is rejected as outside scope, do not retry the same out-of-scope path. Adjust to the allowed files or finish with a concise explanation.
 - In greenfield repos, prioritize a runnable end-to-end candidate over a beautifully decomposed but incomplete module split.
 - Workers return artifacts, not essays. Keep reasoning terse and put the durable handoff into the artifact.
-- Call write_memory when you discover something notable (architecture decisions, gotchas, conventions). Don't wait until the end.
-- If you call "write_memory", always provide non-empty "content".
+- Memory is advisory, never authoritative. Durable memory writes belong in wrap-up or reflection-gated paths.
 - After writing code, test it with run_command_safe when possible.
 - Avoid raw docker/docker compose commands unless the task is specifically to author Docker setup. Grist handles task runtimes itself and raw Docker commands are often blocked.
 - Avoid shell-only environment/version probes like "gh --version" unless you are confirming a blocker; prefer using the task goal to decide whether GitHub CLI is needed.
@@ -444,7 +447,8 @@ Base ref: ${task.base_ref || "(none)"}
 Runtime metadata:
 ${JSON.stringify(runtime, null, 2)}
 Worker packet:
-${JSON.stringify(packet, null, 2)}${historyBlock}`;
+${JSON.stringify(packet, null, 2)}
+${memoryContext ? `Memory context:\n${memoryContext}\n` : ""}${historyBlock}`;
 
     emit("info", "prompt", `step ${stepNum}`, { system: sys, user, step: stepNum });
     log({ timestamp: new Date().toISOString(), step: stepNum, type: "prompt", data: { system: sys, user } });
@@ -692,19 +696,6 @@ ${resp.text.slice(0, 12_000)}`;
         }
       } catch { /* git diff is best-effort */ }
 
-      // Async reflection to persist memory
-      runReflection({
-        taskId: cur.id,
-        jobId: cur.job_id,
-        repoPath,
-        taskGoal: cur.goal,
-        taskRole: cur.role,
-        history: history.slice(-20),
-        reasoning: decision.reasoning_summary || "done",
-        provider,
-        emit,
-      }).catch(() => {});
-
       break;
     }
 
@@ -765,6 +756,7 @@ ${resp.text.slice(0, 12_000)}`;
         const resultStr = JSON.stringify(result);
         const resultSnippet = resultStr.slice(0, 4000);
         const resultOk = typeof result === "object" && result !== null && (result as Record<string, unknown>).ok === true;
+        const contract = taskContract(tr);
 
         if (!resultOk) anyError = true;
 
@@ -776,6 +768,26 @@ ${resp.text.slice(0, 12_000)}`;
           history.push({ role: "tool_result", content: `${tc.tool_name}: ${ok ? "success" : "failed"} — ${JSON.stringify((result as Record<string, unknown>).data || (result as Record<string, unknown>).error).slice(0, 200)}` });
         } else {
           history.push({ role: "tool_result", content: `${tc.tool_name} returned: ${resultSnippet.slice(0, 3000)}` });
+        }
+
+        if (!resultOk && (tc.tool_name === "write_file" || tc.tool_name === "apply_patch")) {
+          const error = String((result as { error?: unknown }).error || "");
+          const violation = extractViolationFromToolError(error, contract.file_ownership);
+          if (violation) {
+            insertArtifact({
+              job_id: tr.job_id,
+              task_id: tr.id,
+              type: "contract_violation",
+              content_json: JSON.stringify(violation),
+              confidence: violation.severity === "major" ? 0.95 : 0.75,
+            });
+            emit(
+              violation.severity === "major" ? "warn" : "info",
+              "contract_violation",
+              `${violation.severity} contract violation: ${violation.violatingFiles.join(", ")}`,
+              violation,
+            );
+          }
         }
 
         // Track files examined

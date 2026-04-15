@@ -237,7 +237,13 @@ export default function App() {
               onPickRepo={openRepoDialog}
             />
           ) : (
-            <TaskDetail rootTaskId={rootTaskId} taskId={selectedTaskId} tick={tick} onRefresh={refresh} />
+            <TaskDetail
+              rootTaskId={rootTaskId}
+              taskId={selectedTaskId}
+              tick={tick}
+              onRefresh={refresh}
+              onSelectTask={selectTask}
+            />
           )}
         </div>
         {memoryOpen && repo && (

@@ -1,4 +1,5 @@
 import type { ToolContext, ToolResult } from "./toolTypes.js";
+import { parseWorkerPacket } from "../services/contractService.js";
 import {
   writeHomeMemoryFile,
   writeRepoMemoryFile,
@@ -21,6 +22,10 @@ export function toolWriteMemory(
 ): ToolResult {
   const { content, scope = "project", title } = args;
   if (!content?.trim()) return { ok: false, error: "content is required" };
+  const packet = parseWorkerPacket(ctx.scopeJson || "{}");
+  if (packet.workflow_phase !== "wrapup") {
+    return { ok: false, error: "write_memory is reserved for wrap-up or reflection-gated paths" };
+  }
 
   const taskName = title || `task-${ctx.taskId}`;
   const scopes = scope === "both" ? ["project", "global"] : [scope];

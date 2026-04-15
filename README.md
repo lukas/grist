@@ -1,6 +1,6 @@
 # Grist
 
-Local **macOS Electron** app to supervise a typed manager-worker swarm against a **git repo**: one manager, scoped workers, structured artifacts, git-first bootstrap, selective best-effort Docker runtimes with managed ports, isolated local branches/worktrees, and verification/summarization passes.
+Local **macOS Electron** app to supervise a typed manager-worker swarm against a **git repo**: one manager, a thin scheduler, contract-scoped workers, structured artifacts, git-first bootstrap, selective best-effort Docker runtimes with managed ports, isolated local branches/worktrees, and verifier-driven episode follow-ups.
 
 ## Quick start
 
@@ -22,9 +22,9 @@ Everything is a **task**. When you type a goal and hit Run:
 1. A **root task** is created
 2. A **manager task** (`kind=planner`) creates the canonical worker plan
 3. Typed **worker tasks** (`scout`, `implementer`, `reviewer`, `verifier`, `summarizer`) execute with structured packets and artifacts
-4. Implementers bootstrap into git/local branches, then best-effort Docker runtimes, and verifier/summarizer follow-ups consume worker artifacts
+4. Implementers/verifiers form the main episode loop: implementer -> verifier -> optional repair -> optional reflection -> wrap-up
 
-All tasks share the same UI: a tree in the sidebar, chat-style event detail with operator messaging on the right.
+All tasks share the same UI: an episode-first tree in the sidebar, chat-style event detail with operator messaging on the right, and an episode flow strip for switching between implement/verify/repair/wrap-up phases.
 
 ## Layout
 
@@ -80,19 +80,23 @@ Installed skills become visible to workers through the read-only tools `list_ski
 
 - **Typed swarm roles**: manager/scout/implementer/reviewer/verifier/summarizer contracts with structured artifacts
 - **Manager-owned planning**: planner writes a canonical `manager_plan` artifact and only parallelizes independent work
+- **Thin scheduler + helper services**: scheduler now delegates dependency/terminal decisions, memory assembly, contract checks, and reflection to dedicated helpers instead of interpreting them inline
+- **Explicit episode contracts**: worker packets now include `contract_json` (`inputs`, `outputs`, `file_ownership`, `acceptance_criteria`, `non_goals`) and plan validation rejects dependency/output mismatches
 - **Git-first execution**: Grist initializes non-git repos and creates an initial snapshot before isolated worktrees need a `HEAD`
 - **Best-effort Docker bootstrap**: implementers/verifiers try to start standalone Docker runtimes with per-task ports and fall back to host execution with a structured warning; CLI-style Node apps no longer auto-start a misleading `npm start` container just because they have a `start` script
 - **Isolated implementer branches/worktrees**: implementers now get dedicated local branches and worktrees instead of sharing one checkout
 - **Verifier follow-ups**: completed implementers automatically fan into verifier tasks
 - **Verifier-driven repair**: failed verification can automatically spawn a repair implementer on the same worktree instead of ending the run
 - **Post-verify wrap-up**: passing verification can now trigger one final wrap-up implementer to clean code, update docs, prepare a PR, and write durable memory notes
+- **Episode-first UI/API**: `getChildTasks` now returns derived episode metadata so the sidebar/detail views can surface episode roots, aggregate episode status, current phase, attempt number, and episode flow explicitly
 - **Safer greenfield planning**: Empty repos now default to one writer owning bootstrap + integration because isolated worktrees do not share unmerged code
+- **Deterministic contract enforcement**: out-of-scope implementer writes now persist `contract_violation` artifacts; minor same-area drift continues, major cross-boundary drift triggers replan
 - **Verified apply-back**: when verification passes, Grist copies the changed source files back into the canonical repo and skips transient outputs like `node_modules` and `dist`
 - **Verifier-gated completion**: a run no longer finishes while the latest relevant verifier in a repair chain is still failing
 - **Retry on model errors**: Workers retry LLM/parse errors up to 3× with backoff
 - **Git diff captures new files**: Uses `git add -A` + `--cached` diff to include untracked files
 - **Expanded allowlist**: Common dev commands (npm, node, python, git, curl, etc.) + safer wrapper/chaining support for benign multi-command probes like `pwd && ls -la`, while still rejecting redirects and mixed dangerous chains
-- **Memory system**: `write_memory`/`read_memory` tools + async post-task reflection
+- **Memory system**: planner/worker prompts now get lightweight advisory memory via `memoryService`, and durable writes are reserved for wrap-up/reflection instead of arbitrary worker steps
 - **Skill system**: bundled/global/project skill packs, top-bar Skills modal, CLI `skills` entrypoint, runtime `list_skills` / `read_skill`
 - **Compaction preserves file list**: "Files written" entry survives context compaction
 - **Worktree-aware repo tools**: implementer reads/lists/greps now operate against the isolated worktree, not the canonical repo checkout

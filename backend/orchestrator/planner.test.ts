@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { __plannerInternals } from "./planner.js";
 import type { ManagerPlan } from "../types/taskState.js";
 
+function contract(fileOwnership: string[], outputs: string[], inputs: string[] = []) {
+  return {
+    inputs,
+    outputs,
+    file_ownership: fileOwnership,
+    acceptance_criteria: [],
+    non_goals: [],
+  };
+}
+
 describe("planner greenfield guardrails", () => {
   it("collapses empty-repo multi-implementer plans into one writer", () => {
     const plan: ManagerPlan = {
@@ -16,6 +26,7 @@ describe("planner greenfield guardrails", () => {
             files: ["package.json", "tsconfig.json", "src/game.ts"],
             area: "core",
             workflow_phase: "",
+            contract_json: contract(["package.json", "tsconfig.json", "src/game.ts"], ["candidate_patch"]),
             acceptance_criteria: [],
             non_goals: [],
             similar_patterns: [],
@@ -33,6 +44,7 @@ describe("planner greenfield guardrails", () => {
             files: ["src/ui.ts", "src/ai.ts", "src/index.ts"],
             area: "ui",
             workflow_phase: "",
+            contract_json: contract(["src/ui.ts", "src/ai.ts", "src/index.ts"], ["candidate_patch"]),
             acceptance_criteria: [],
             non_goals: [],
             similar_patterns: [],
@@ -85,6 +97,7 @@ describe("planner greenfield guardrails", () => {
             files: [],
             area: "app",
             workflow_phase: "",
+            contract_json: contract(["**/*"], ["candidate_patch"]),
             acceptance_criteria: [],
             non_goals: [],
             similar_patterns: [],
@@ -116,6 +129,7 @@ describe("planner greenfield guardrails", () => {
             files: [],
             area: "repo",
             workflow_phase: "",
+            contract_json: contract([], ["findings_report"]),
             acceptance_criteria: [],
             non_goals: [],
             similar_patterns: [],
@@ -133,6 +147,7 @@ describe("planner greenfield guardrails", () => {
             files: [],
             area: "app",
             workflow_phase: "",
+            contract_json: contract(["**/*"], ["candidate_patch"], ["findings_report"]),
             acceptance_criteria: [],
             non_goals: [],
             similar_patterns: [],

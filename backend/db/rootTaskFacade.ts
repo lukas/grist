@@ -30,6 +30,16 @@ export interface RootTaskRow extends RootTaskSummary {
   _jobId: number;
 }
 
+export interface ChildTaskRow extends TaskRow {
+  episode_root_task_id: number | null;
+  episode_label: string;
+  episode_phase: string;
+  episode_status: string;
+  episode_attempt: number | null;
+  episode_task_ids_json: string;
+  episode_is_root: boolean;
+}
+
 const jobStatusToTaskStatus: Record<string, TaskStatus> = {
   draft: "queued",
   planning: "running",
@@ -170,13 +180,145 @@ export function jobIdToRootTask(jobId: number): number | undefined {
   return findRootTaskForJob(jobId)?.id;
 }
 
+function parseWorkflowPhase(scopeJson: string): string {
+  try {
+    const parsed = JSON.parse(scopeJson || "{}") as { workflow_phase?: unknown };
+    return typeof parsed.workflow_phase === "string" ? parsed.workflow_phase : "";
+  } catch {
+    return "";
+  }
+}
+
+function taskPhase(task: TaskRow): string {
+  if (task.role === "scout") return "discover";
+  if (task.role === "reviewer") return "review";
+  if (task.role === "summarizer" || task.kind === "reducer") return "summarize";
+  if (task.role === "verifier") return "verify";
+  if (task.role === "implementer") {
+    const workflowPhase = parseWorkflowPhase(task.scope_json);
+    if (workflowPhase === "wrapup") return "wrapup";
+    return task.parent_task_id != null ? "repair" : "implement";
+  }
+  return task.kind;
+}
+
+function statusRank(status: string): number {
+  switch (status) {
+    case "running":
+      return 7;
+    case "failed":
+      return 6;
+    case "paused":
+      return 5;
+    case "blocked":
+      return 4;
+    case "ready":
+      return 3;
+    case "queued":
+      return 2;
+    case "stopped":
+      return 1;
+    case "done":
+    case "completed":
+      return 0;
+    default:
+      return 0;
+  }
+}
+
+function nearestImplementer(task: TaskRow, byId: Map<number, TaskRow>): TaskRow | null {
+  let cursor: TaskRow | undefined = task;
+  while (cursor) {
+    if (cursor.role === "implementer") return cursor;
+    cursor = cursor.parent_task_id != null ? byId.get(cursor.parent_task_id) : undefined;
+  }
+  return null;
+}
+
+function episodeRoot(task: TaskRow, byId: Map<number, TaskRow>): TaskRow | null {
+  const implementer = nearestImplementer(task, byId);
+  if (!implementer) {
+    if (["scout", "reviewer", "summarizer"].includes(task.role) || task.kind === "reducer") return task;
+    return null;
+  }
+  let root = implementer;
+  let cursor = implementer.parent_task_id != null ? byId.get(implementer.parent_task_id) : undefined;
+  while (cursor) {
+    if (cursor.role === "implementer") root = cursor;
+    cursor = cursor.parent_task_id != null ? byId.get(cursor.parent_task_id) : undefined;
+  }
+  return root;
+}
+
+function episodeAttempt(task: TaskRow, byId: Map<number, TaskRow>, rootTask: TaskRow | null): number | null {
+  if (!rootTask || rootTask.role !== "implementer") return null;
+  let count = 0;
+  let cursor: TaskRow | undefined = task;
+  while (cursor) {
+    if (cursor.role === "implementer") count += 1;
+    if (cursor.id === rootTask.id) break;
+    cursor = cursor.parent_task_id != null ? byId.get(cursor.parent_task_id) : undefined;
+  }
+  return count > 0 ? count : 1;
+}
+
+function episodeLabel(task: TaskRow, root: TaskRow | null, rootsInOrder: TaskRow[]): string {
+  if (!root) return task.role;
+  if (root.role === "scout") return "Discovery";
+  if (root.role === "reviewer") return "Review";
+  if (root.role === "summarizer" || root.kind === "reducer") return "Summary";
+  const index = rootsInOrder.findIndex((candidate) => candidate.id === root.id);
+  return index >= 0 ? `Episode ${index + 1}` : "Episode";
+}
+
+function enrichChildTasks(tasks: TaskRow[]): ChildTaskRow[] {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const rootIds = Array.from(
+    new Set(
+      tasks
+        .map((task) => episodeRoot(task, byId)?.id)
+        .filter((id): id is number => id != null)
+    )
+  );
+  const rootsInOrder = rootIds
+    .map((id) => byId.get(id))
+    .filter((task): task is TaskRow => task != null)
+    .sort((a, b) => a.id - b.id);
+  const episodeTasksByRoot = new Map<number, TaskRow[]>();
+  for (const task of tasks) {
+    const root = episodeRoot(task, byId);
+    if (!root) continue;
+    const bucket = episodeTasksByRoot.get(root.id) || [];
+    bucket.push(task);
+    episodeTasksByRoot.set(root.id, bucket);
+  }
+
+  return tasks.map((task) => {
+    const root = episodeRoot(task, byId);
+    const episodeTasks = root ? (episodeTasksByRoot.get(root.id) || []).sort((a, b) => a.id - b.id) : [task];
+    const aggregateStatus = episodeTasks
+      .map((candidate) => candidate.status)
+      .sort((a, b) => statusRank(b) - statusRank(a))[0] || task.status;
+    return {
+      ...task,
+      episode_root_task_id: root?.id ?? null,
+      episode_label: episodeLabel(task, root, rootsInOrder),
+      episode_phase: taskPhase(task),
+      episode_status: aggregateStatus,
+      episode_attempt: episodeAttempt(task, byId, root),
+      episode_task_ids_json: JSON.stringify(episodeTasks.map((candidate) => candidate.id)),
+      episode_is_root: root?.id === task.id,
+    };
+  });
+}
+
 /**
  * Get all child tasks for a root task (excluding the root itself).
  */
-export function getChildTasks(rootTaskId: number): TaskRow[] {
+export function getChildTasks(rootTaskId: number): ChildTaskRow[] {
   const task = getTask(rootTaskId);
   if (!task) return [];
-  return listTasksForJob(task.job_id).filter((t) => t.kind !== "root");
+  return enrichChildTasks(listTasksForJob(task.job_id).filter((t) => t.kind !== "root"));
 }
 
 /**

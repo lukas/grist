@@ -2,14 +2,14 @@ import { copyFileSync, existsSync } from "node:fs";
 import { ensureGristDir } from "../logging/taskLogger.js";
 import { insertJob, getJob, updateJob, listJobs } from "../db/jobRepo.js";
 import { insertTask, updateTask, getTask, listTasksForJob } from "../db/taskRepo.js";
-import { getLatestArtifactForTask, listArtifactsForJob } from "../db/artifactRepo.js";
+import { getLatestArtifactForTask, insertArtifact, listArtifactsForJob } from "../db/artifactRepo.js";
 import { listEvents, listEventsForTask, listJobLevelEvents } from "../db/eventRepo.js";
 import { insertEvent } from "../db/eventRepo.js";
 import { runPlanner } from "./planner.js";
 import { runSchedulerTick } from "./scheduler.js";
 import { runTaskWorker } from "./workerRunner.js";
 import { runReducerPass } from "./reducer.js";
-import { createWorktree, syncWorktreeToRepo } from "../workspace/worktreeManager.js";
+import { createWorktree, listWorktreeSyncableChanges, syncWorktreeToRepo } from "../workspace/worktreeManager.js";
 import { defaultWorktreePath, scratchpadPath } from "../workspace/pathUtils.js";
 import { ensureScratchpad } from "../workspace/scratchpadManager.js";
 import {
@@ -23,9 +23,11 @@ import { ALL_TOOL_NAMES } from "../tools/executeTool.js";
 import type { TaskControlAction, JobControlAction } from "../../shared/ipc.js";
 import type { ModelProviderName } from "../types/models.js";
 import { VerifierOutputSchema, WorkerPacketSchema } from "../types/taskState.js";
+import { canSafelyForkTask, classifyContractViolation, parseWorkerPacket, taskContract } from "../services/contractService.js";
+import { maybePersistReflection } from "../services/reflectionService.js";
+import { MAX_REPAIR_ATTEMPTS, shouldReplan } from "./replanPolicy.js";
 
 const PATCH_TOOLS = ALL_TOOL_NAMES.filter((n) => !["remove_worktree", "create_worktree"].includes(n));
-const MAX_AUTO_REPAIR_DEPTH = 2;
 
 const MIN_RESUME_STEP_BUMP = 5;
 const MIN_RESUME_TOKEN_BUMP = 50_000;
@@ -70,12 +72,7 @@ function buildVerifierRepairGoal(originalGoal: string, summary: string, failures
 }
 
 function isWrapupTask(scopeJson: string): boolean {
-  try {
-    const parsed = WorkerPacketSchema.parse(JSON.parse(scopeJson || "{}"));
-    return parsed.workflow_phase === "wrapup";
-  } catch {
-    return false;
-  }
+  return parseWorkerPacket(scopeJson).workflow_phase === "wrapup";
 }
 
 function buildWrapupGoal(originalGoal: string): string {
@@ -95,6 +92,10 @@ function readVerifierArtifact(taskId: number) {
   } catch {
     return null;
   }
+}
+
+function countRequestedReplans(jobId: number): number {
+  return (listEvents(jobId, 1000) as Array<{ type: string }>).filter((event) => event.type === "replan_requested").length;
 }
 
 export function spawnAutoRepairTaskForVerifier(
@@ -120,14 +121,14 @@ export function spawnAutoRepairTaskForVerifier(
   const tasks = listTasksForJob(verifier.job_id);
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const depth = countImplementerDepth(parent.id, tasksById);
-  if (depth >= MAX_AUTO_REPAIR_DEPTH) {
+  if (depth >= MAX_REPAIR_ATTEMPTS) {
     insertEvent({
       job_id: verifier.job_id,
       task_id: verifier.id,
       level: "warn",
       type: "repair_skipped",
       message: `Skipping automatic repair after verifier failure because repair depth ${depth} reached the cap`,
-      data_json: JSON.stringify({ depth, cap: MAX_AUTO_REPAIR_DEPTH }),
+      data_json: JSON.stringify({ depth, cap: MAX_REPAIR_ATTEMPTS }),
     });
     return null;
   }
@@ -228,6 +229,21 @@ export function spawnWrapupTaskForVerifier(
   const wrapupPacket = WorkerPacketSchema.parse({
     workflow_phase: "wrapup",
     area: "cleanup, docs, PR handoff, memory",
+    contract_json: {
+      inputs: ["verification_result"],
+      outputs: ["candidate_patch"],
+      file_ownership: ["**/*"],
+      acceptance_criteria: [
+        "Clean up obvious code issues that are low-risk and improve maintainability",
+        "Update relevant README or project docs for the delivered change",
+        "Write durable project memory notes if useful lessons emerged",
+        "If possible, leave the branch in PR-ready shape and create a PR",
+      ],
+      non_goals: [
+        "Do not start a new feature branch unrelated to the completed task",
+        "Do not rewrite stable code just for style churn",
+      ],
+    },
     acceptance_criteria: [
       "Clean up obvious code issues that are low-risk and improve maintainability",
       "Update relevant README or project docs for the delivered change",
@@ -472,11 +488,90 @@ export class GristOrchestrator {
     return true;
   }
 
+  private enforceCompletedTaskContract(taskId: number): { ok: true } | { ok: false; severity: "minor" | "major"; reason: string } {
+    const task = getTask(taskId);
+    const job = task ? getJob(task.job_id) : undefined;
+    if (!task || !job || task.role !== "implementer" || !task.worktree_path) return { ok: true };
+    const contract = taskContract(task);
+    if (contract.file_ownership.length === 0 || contract.file_ownership.includes("**/*")) return { ok: true };
+    const changed = listWorktreeSyncableChanges(job.repo_path, task.worktree_path);
+    if (!changed.ok) {
+      return { ok: false, severity: "major", reason: changed.stderr };
+    }
+    const violation = classifyContractViolation(contract.file_ownership, changed.files);
+    if (!violation) return { ok: true };
+    insertArtifact({
+      job_id: task.job_id,
+      task_id: task.id,
+      type: "contract_violation",
+      content_json: JSON.stringify(violation),
+      confidence: violation.severity === "major" ? 0.95 : 0.75,
+    });
+    insertEvent({
+      job_id: task.job_id,
+      task_id: task.id,
+      level: violation.severity === "major" ? "warn" : "info",
+      type: "contract_violation",
+      message: `${violation.severity} contract violation`,
+      data_json: JSON.stringify(violation),
+    });
+    if (violation.severity === "major") {
+      updateTask(task.id, {
+        status: "failed",
+        blocker: `Major contract violation: ${violation.violatingFiles.join(", ")}`,
+      });
+      return { ok: false, severity: "major", reason: violation.reason };
+    }
+    return { ok: false, severity: "minor", reason: violation.reason };
+  }
+
+  private requestReplan(jobId: number, taskId: number | null, reason: string): void {
+    const existingReplans = countRequestedReplans(jobId);
+    if (!shouldReplan({
+      repairAttempts: MAX_REPAIR_ATTEMPTS,
+      majorContractViolation: true,
+      integrationFailure: false,
+      budgetExhausted: false,
+      dependencyMismatch: false,
+      existingReplans,
+    })) {
+      return;
+    }
+    for (const task of listTasksForJob(jobId)) {
+      if (["queued", "ready", "running", "blocked", "paused"].includes(task.status) && task.kind !== "root") {
+        updateTask(task.id, { status: "superseded", blocker: "Superseded by replan" });
+      }
+    }
+    insertEvent({
+      job_id: jobId,
+      task_id: taskId,
+      level: "warn",
+      type: "replan_requested",
+      message: reason,
+    });
+    updateJob(jobId, { status: "planning" });
+    void this.planJob(jobId).catch((error) => {
+      insertEvent({
+        job_id: jobId,
+        task_id: taskId,
+        level: "error",
+        type: "replan_failed",
+        message: String(error),
+      });
+      updateJob(jobId, { status: "failed" });
+    });
+  }
+
   private maybeSpawnRoleFollowups(taskId: number): void {
     const task = getTask(taskId);
     if (!task) return;
 
     if (task.role === "implementer" && task.status === "done") {
+      const contractCheck = this.enforceCompletedTaskContract(task.id);
+      if (!contractCheck.ok && contractCheck.severity === "major") {
+        this.requestReplan(task.job_id, task.id, contractCheck.reason);
+        return;
+      }
       const existingVerifier = listTasksForJob(task.job_id).find(
         (candidate) => candidate.parent_task_id === task.id && candidate.role === "verifier"
       );
@@ -492,6 +587,10 @@ export class GristOrchestrator {
       const verifierArtifact = readVerifierArtifact(task.id);
       if (verifierArtifact?.passed) {
         applyVerifiedWorktreeToRepo(task.id);
+        const parent = task.parent_task_id ? getTask(task.parent_task_id) : undefined;
+        if (parent?.role === "implementer") {
+          void maybePersistReflection(parent.id, task.id).catch(() => {});
+        }
         const wrapupTaskId = spawnWrapupTaskForVerifier(task.id, this.appWorkspaceRoot);
         if (wrapupTaskId) {
           this.emit("wrapup_spawned", task.job_id, wrapupTaskId, { parentTaskId: task.id });
@@ -500,6 +599,15 @@ export class GristOrchestrator {
         const repairTaskId = spawnAutoRepairTaskForVerifier(task.id, this.appWorkspaceRoot);
         if (repairTaskId) {
           this.emit("repair_spawned", task.job_id, repairTaskId, { parentTaskId: task.id });
+        } else if (shouldReplan({
+          repairAttempts: MAX_REPAIR_ATTEMPTS,
+          majorContractViolation: false,
+          integrationFailure: true,
+          budgetExhausted: false,
+          dependencyMismatch: false,
+          existingReplans: countRequestedReplans(task.job_id),
+        })) {
+          this.requestReplan(task.job_id, task.id, "Verifier failed after repair budget was exhausted");
         }
       }
     }
@@ -632,7 +740,15 @@ export class GristOrchestrator {
       kind: "patch_writer",
       role: "implementer",
       goal,
-      scope_json: JSON.stringify({}),
+      scope_json: JSON.stringify({
+        contract_json: {
+          inputs: [],
+          outputs: ["candidate_patch"],
+          file_ownership: ["**/*"],
+          acceptance_criteria: [],
+          non_goals: [],
+        },
+      }),
       status: "queued",
       priority: 50,
       assigned_model_provider: job.default_model_provider as ModelProviderName,
@@ -699,7 +815,16 @@ export class GristOrchestrator {
       kind: "verifier",
       role: "verifier",
       goal: `Verify patch from task ${patchTaskId}`,
-      scope_json: JSON.stringify({ patchTaskId }),
+      scope_json: JSON.stringify({
+        patchTaskId,
+        contract_json: {
+          inputs: ["candidate_patch"],
+          outputs: ["verification_result"],
+          file_ownership: [],
+          acceptance_criteria: ["Run the relevant validation commands and report pass/fail evidence"],
+          non_goals: ["Do not silently expand implementation scope"],
+        },
+      }),
       status: "queued",
       priority: 200,
       assigned_model_provider: job.verifier_model_provider as ModelProviderName,
@@ -752,6 +877,30 @@ export class GristOrchestrator {
     if (a.type === "redirect") {
       const t0 = getTask(a.taskId);
       if (!t0) return;
+      if (t0.status === "running") {
+        insertEvent({
+          job_id: t0.job_id,
+          task_id: a.taskId,
+          level: "info",
+          type: "task_redirect_deferred",
+          message: a.newGoal.slice(0, 200),
+        });
+        return;
+      }
+      if (a.newScopeJson != null) {
+        try {
+          parseWorkerPacket(a.newScopeJson);
+        } catch (error) {
+          insertEvent({
+            job_id: t0.job_id,
+            task_id: a.taskId,
+            level: "warn",
+            type: "task_redirect_rejected",
+            message: String(error),
+          });
+          return;
+        }
+      }
       updateTask(a.taskId, {
         goal: a.newGoal,
         ...(a.newScopeJson != null ? { scope_json: a.newScopeJson } : {}),
@@ -783,6 +932,18 @@ export class GristOrchestrator {
       const t = getTask(a.taskId);
       const job = t ? getJob(t.job_id) : undefined;
       if (!t || !job) return;
+      const nextPacket = a.newScopeJson != null ? parseWorkerPacket(a.newScopeJson) : parseWorkerPacket(t.scope_json);
+      const forkCheck = canSafelyForkTask(t.id, nextPacket);
+      if (!forkCheck.ok) {
+        insertEvent({
+          job_id: t.job_id,
+          task_id: t.id,
+          level: "warn",
+          type: "task_fork_rejected",
+          message: forkCheck.reason,
+        });
+        return;
+      }
       const nid = insertTask({
         job_id: t.job_id,
         parent_task_id: a.stopOriginal ? null : t.id,

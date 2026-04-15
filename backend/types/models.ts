@@ -65,6 +65,7 @@ export const ARTIFACT_TYPES = [
   "hypothesis_list",
   "candidate_patch",
   "verification_result",
+  "contract_violation",
   "file_map",
   "final_summary",
 ] as const;

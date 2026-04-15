@@ -10,6 +10,7 @@ export interface ToolContext {
   repoPath: string;
   worktreePath: string | null;
   scopeFiles?: string[];
+  scopeJson?: string;
   scratchpadPath: string;
   appWorkspaceRoot: string;
   allowedToolNames: string[];

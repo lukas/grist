@@ -19,7 +19,10 @@ import {
   type PlannedWorkerTask,
   type WorkerPacket,
   expectedArtifactTypeForRole,
+  normalizeWorkerPacket,
 } from "../types/taskState.js";
+import { normalizePlanContracts, validatePlanContracts } from "../services/contractService.js";
+import { getPlannerContext } from "../services/memoryService.js";
 
 const ANALYSIS_TOOLS = ALL_TOOL_NAMES.filter(
   (n) => !["write_file", "apply_patch", "create_worktree", "remove_worktree"].includes(n)
@@ -68,7 +71,7 @@ function packet(overrides: Partial<WorkerPacket>): WorkerPacket {
   return WorkerPacketSchema.parse(overrides);
 }
 
-function buildPlannerPrompt(goal: string, operatorNotes: string, files: string[], isEmpty: boolean): { system: string; user: string } {
+function buildPlannerPrompt(goal: string, operatorNotes: string, files: string[], isEmpty: boolean, memoryContext = ""): { system: string; user: string } {
   const greenfieldGuidance = isEmpty
     ? `
 Empty-repo guidance:
@@ -113,6 +116,13 @@ Output ONLY valid JSON matching this shape:
       "packet": {
         "files": ["exact/files.ts"],
         "area": "module or subsystem",
+        "contract_json": {
+          "inputs": ["findings_report"],
+          "outputs": ["candidate_patch"],
+          "file_ownership": ["exact/files.ts"],
+          "acceptance_criteria": ["what done means"],
+          "non_goals": ["what not to do"]
+        },
         "acceptance_criteria": ["what done means"],
         "non_goals": ["what not to do"],
         "similar_patterns": ["paths or symbols to mimic"],
@@ -140,7 +150,8 @@ Requirements:
 
   const user = `User goal: ${goal}
 ${operatorNotes ? `Operator notes: ${operatorNotes}\n` : ""}
-${filesSummary}`;
+${filesSummary}
+${memoryContext ? `\nMemory context:\n${memoryContext}` : ""}`;
 
   return { system, user };
 }
@@ -175,6 +186,17 @@ function fallbackPlan(goal: string, isEmpty: boolean, fileCount: number): Manage
           max_steps: 50,
           packet: packet({
             area: "greenfield bootstrap + full implementation",
+            contract_json: {
+              inputs: [],
+              outputs: ["candidate_patch"],
+              file_ownership: ["**/*"],
+              acceptance_criteria: [
+                "Create the runnable project scaffold first (manifest/config/entrypoint as needed)",
+                "Implement the requested project end-to-end",
+                "Run at least one focused validation command when possible",
+              ],
+              non_goals: ["Do not leave the repo split across partially complete writer branches"],
+            },
             acceptance_criteria: [
               "Create the runnable project scaffold first (manifest/config/entrypoint as needed)",
               "Implement the requested project end-to-end",
@@ -204,6 +226,13 @@ function fallbackPlan(goal: string, isEmpty: boolean, fileCount: number): Manage
         goal: `Locate the relevant files, analogous patterns, and likely validation commands for: ${goal}`,
         max_steps: 12,
         packet: packet({
+          contract_json: {
+            inputs: [],
+            outputs: ["findings_report"],
+            file_ownership: [],
+            acceptance_criteria: ["Return relevant files and analogous implementations"],
+            non_goals: [],
+          },
           acceptance_criteria: ["Return relevant files and analogous implementations"],
           success_criteria: ["Produce a findings_report artifact"],
         }),
@@ -213,6 +242,13 @@ function fallbackPlan(goal: string, isEmpty: boolean, fileCount: number): Manage
         goal,
         max_steps: 30,
         packet: packet({
+          contract_json: {
+            inputs: ["findings_report"],
+            outputs: ["candidate_patch"],
+            file_ownership: ["**/*"],
+            acceptance_criteria: ["Implement the requested change"],
+            non_goals: [],
+          },
           acceptance_criteria: ["Implement the requested change"],
           constraints: ["Preserve current public behavior unless the goal requires otherwise"],
           success_criteria: ["Produce a candidate patch artifact"],
@@ -231,6 +267,13 @@ function fallbackPlan(goal: string, isEmpty: boolean, fileCount: number): Manage
         goal: `Analyze existing code for: ${goal}`,
         max_steps: 20,
         packet: packet({
+          contract_json: {
+            inputs: [],
+            outputs: ["findings_report"],
+            file_ownership: [],
+            acceptance_criteria: ["Return relevant files, tests, and analogous patterns"],
+            non_goals: [],
+          },
           acceptance_criteria: ["Return relevant files, tests, and analogous patterns"],
           success_criteria: ["Produce a findings_report artifact"],
         }),
@@ -241,6 +284,13 @@ function fallbackPlan(goal: string, isEmpty: boolean, fileCount: number): Manage
         goal: `Implement changes for: ${goal}`,
         max_steps: 30,
         packet: packet({
+          contract_json: {
+            inputs: ["findings_report"],
+            outputs: ["candidate_patch"],
+            file_ownership: ["**/*"],
+            acceptance_criteria: ["Implement the requested change"],
+            non_goals: [],
+          },
           acceptance_criteria: ["Implement the requested change"],
           success_criteria: ["Produce a candidate patch artifact"],
         }),
@@ -271,6 +321,13 @@ function ensureSummarizer(plan: ManagerPlan): ManagerPlan {
         role: "summarizer",
         goal: "Summarize the manager plan outcomes and worker artifacts into a concise final handoff.",
         packet: packet({
+          contract_json: {
+            inputs: plan.tasks.map((task) => expectedArtifactTypeForRole(task.role)),
+            outputs: ["final_summary"],
+            file_ownership: [],
+            acceptance_criteria: ["Summarize completed work, risks, and next steps"],
+            non_goals: ["Do not invent code changes that workers did not make"],
+          },
           acceptance_criteria: ["Summarize completed work, risks, and next steps"],
           non_goals: ["Do not invent code changes that workers did not make"],
           constraints: ["Use worker artifacts as the primary source of truth"],
@@ -327,7 +384,7 @@ function dropGreenfieldScouts(plan: ManagerPlan): ManagerPlan {
 }
 
 function validateParallelism(plan: ManagerPlan, goal: string, isEmpty: boolean, fileCount: number): ManagerPlan {
-  let adjusted = plan;
+  let adjusted = normalizePlanContracts(plan);
 
   if (isEmpty) {
     adjusted = dropGreenfieldScouts(adjusted);
@@ -342,7 +399,11 @@ function validateParallelism(plan: ManagerPlan, goal: string, isEmpty: boolean, 
   }
 
   const tasks = adjusted.tasks;
-  if (tasks.length <= 1) return adjusted;
+  if (tasks.length <= 1) {
+    const validated = validatePlanContracts(adjusted);
+    if (validated.ok) return validated.plan;
+    return normalizePlanContracts(fallbackPlan(goal, isEmpty, fileCount));
+  }
 
   adjusted = ensureSummarizer(dropRedundantPlannedVerifiers(adjusted));
 
@@ -371,23 +432,39 @@ function validateParallelism(plan: ManagerPlan, goal: string, isEmpty: boolean, 
     };
   }
 
-  const parallelImpl = adjusted.tasks.filter((t) => t.role === "implementer" && (!t.depends_on || t.depends_on.length === 0));
+  const validated = validatePlanContracts(adjusted);
+  if (!validated.ok) {
+    const collapsed = normalizePlanContracts(fallbackPlan(goal, isEmpty, fileCount));
+    return {
+      ...collapsed,
+      reasoning: `${collapsed.reasoning} [Collapsed invalid plan because ${validated.reason}]`,
+    };
+  }
+
+  const parallelImpl = validated.plan.tasks.filter((t) => t.role === "implementer" && (!t.depends_on || t.depends_on.length === 0));
   if (parallelImpl.length > 1) {
     const disjoint = parallelImpl.every((task, index) =>
       parallelImpl.slice(index + 1).every((other) => !tasksOverlap(task, other))
     );
     if (disjoint) {
-      return adjusted;
+      return validated.plan;
     }
     const implGoal = parallelImpl.map((t) => t.goal).join("; ");
     const mergedFiles = Array.from(new Set(parallelImpl.flatMap((t) => t.packet.files || [])));
-    const otherTasks = adjusted.tasks.filter((t) => !(t.role === "implementer" && (!t.depends_on || t.depends_on.length === 0)));
+    const otherTasks = validated.plan.tasks.filter((t) => !(t.role === "implementer" && (!t.depends_on || t.depends_on.length === 0)));
     const mergedImpl: PlannedWorkerTask = {
       role: "implementer",
       goal: implGoal,
       max_steps: Math.max(...parallelImpl.map((t) => t.max_steps || 20), 30),
       packet: packet({
         files: mergedFiles,
+        contract_json: {
+          inputs: [],
+          outputs: ["candidate_patch"],
+          file_ownership: mergedFiles.length > 0 ? mergedFiles : ["**/*"],
+          acceptance_criteria: ["Implement the requested changes without scope conflicts"],
+          non_goals: [],
+        },
         acceptance_criteria: ["Implement the requested changes without scope conflicts"],
         constraints: ["Keep all coupled edits in one implementer worktree"],
         success_criteria: ["Produce a candidate patch artifact"],
@@ -395,13 +472,13 @@ function validateParallelism(plan: ManagerPlan, goal: string, isEmpty: boolean, 
       depends_on: otherTasks.length > 0 ? otherTasks.map((_, i) => i) : [],
     };
     return {
-      ...adjusted,
-      reasoning: `${adjusted.reasoning} [Merged ${parallelImpl.length} parallel implementers because their ownership was not independent]`,
+      ...validated.plan,
+      reasoning: `${validated.plan.reasoning} [Merged ${parallelImpl.length} parallel implementers because their ownership was not independent]`,
       tasks: [...otherTasks, mergedImpl],
     };
   }
 
-  return adjusted;
+  return validated.plan;
 }
 
 function roleToTaskKind(role: WorkerRole): TaskKind {
@@ -516,7 +593,8 @@ export async function runPlanner(job: JobRow, appWorkspaceRoot: string): Promise
   });
 
   let plan: ManagerPlan;
-  const { system, user } = buildPlannerPrompt(job.user_goal, job.operator_notes, files, isEmpty);
+  const { memoryContext } = getPlannerContext(job.repo_path, job.user_goal);
+  const { system, user } = buildPlannerPrompt(job.user_goal, job.operator_notes, files, isEmpty, memoryContext);
 
   insertEvent({
     job_id: job.id,
@@ -553,7 +631,7 @@ export async function runPlanner(job: JobRow, appWorkspaceRoot: string): Promise
 
     const parsed = parseLLMPlan(resp.text);
     if (parsed && parsed.tasks?.length > 0) {
-      plan = parsed;
+      plan = normalizePlanContracts(parsed);
     } else {
       insertEvent({
         job_id: job.id,
@@ -563,7 +641,7 @@ export async function runPlanner(job: JobRow, appWorkspaceRoot: string): Promise
         message: "Could not parse LLM plan, using fallback",
         data_json: JSON.stringify({ raw: resp.text.slice(0, 2000) }),
       });
-      plan = fallbackPlan(job.user_goal, isEmpty, files.length);
+      plan = normalizePlanContracts(fallbackPlan(job.user_goal, isEmpty, files.length));
     }
   } catch (e) {
     insertEvent({
@@ -573,7 +651,7 @@ export async function runPlanner(job: JobRow, appWorkspaceRoot: string): Promise
       type: "planner_error_fallback",
       message: `LLM planner failed (${String(e)}), using fallback`,
     });
-    plan = fallbackPlan(job.user_goal, isEmpty, files.length);
+    plan = normalizePlanContracts(fallbackPlan(job.user_goal, isEmpty, files.length));
   }
 
   // Validate: enforce sensible parallelism
@@ -626,7 +704,7 @@ export async function runPlanner(job: JobRow, appWorkspaceRoot: string): Promise
       kind,
       role: t.role,
       goal: t.goal,
-      scope_json: JSON.stringify(t.packet || {}),
+      scope_json: JSON.stringify(normalizeWorkerPacket(t.packet || {}, t.role)),
       status: hasDeps ? "blocked" : "queued",
       priority: plan.tasks.length - i,
       assigned_model_provider: defaultP,

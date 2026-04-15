@@ -25,6 +25,14 @@ Each task row records:
 - branch/worktree/runtime metadata
 - tool allowlist, budget, blocker state
 
+In practice, the main execution unit is an episode-shaped chain:
+
+- `implementer`
+- `verifier`
+- optional repair `implementer`
+- optional local reflection
+- optional wrap-up `implementer`
+
 ## Planning Strategy
 
 The manager is the only component that creates the canonical initial plan.
@@ -48,7 +56,15 @@ Worker packets are passed through `scope_json` and typically include:
 
 - `files`
 - `area`
+- `contract_json`
 - `acceptance_criteria`
+- `contract_json` is the source of truth for:
+  - `inputs`
+  - `outputs`
+  - `file_ownership`
+  - `acceptance_criteria`
+  - `non_goals`
+
 - `non_goals`
 - `similar_patterns`
 - `constraints`
@@ -70,6 +86,7 @@ Parallelism policy:
 - implementers only run in parallel when file ownership is disjoint
 - if overlapping implementers are detected, planner validation merges them into one implementer task
 - for greenfield repos, planner validation collapses multiple implementers into one writer by default
+- if ownership is uncertain, planner validation falls back to the smaller/safer swarm
 
 ## Subtask Tracking
 
@@ -83,6 +100,7 @@ Current automatic follow-up:
 - successful `implementer` -> child `verifier`
 - failed `verifier` -> child `implementer` repair task (capped retry depth)
 - passed `verifier` for non-wrap-up work -> child `implementer` wrap-up task
+- passed verifier on a non-trivial episode -> optional local reflection/memory write
 
 Tracking is relational, not prompt-local:
 
@@ -111,7 +129,7 @@ Persisted per-task metadata includes:
 
 ## Memory Strategy
 
-Grist treats memory as a persisted cross-task aid, not just prompt-local context.
+Grist treats memory as advisory context, not authoritative state.
 
 There are four durable memory surfaces:
 

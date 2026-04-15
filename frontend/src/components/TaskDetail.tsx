@@ -9,13 +9,16 @@ export function TaskDetail({
   rootTaskId,
   taskId,
   tick,
+  onSelectTask,
 }: {
   rootTaskId: number | null;
   taskId: number | null;
   tick: number;
   onRefresh: () => void;
+  onSelectTask: (taskId: number) => void;
 }) {
   const [task, setTask] = useState<ChildTask | null>(null);
+  const [allTasks, setAllTasks] = useState<ChildTask[]>([]);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -26,7 +29,9 @@ export function TaskDetail({
       return;
     }
     void window.grist.getChildTasks(rootTaskId).then((rows) => {
-      setTask((rows as ChildTask[]).find((r) => r.id === taskId) || null);
+      const typedRows = rows as ChildTask[];
+      setAllTasks(typedRows);
+      setTask(typedRows.find((r) => r.id === taskId) || null);
     });
     void window.grist.getEventsForTask(taskId).then((rows) =>
       setEvents(rows as TaskEvent[]),
@@ -38,6 +43,12 @@ export function TaskDetail({
   }, [events.length]);
 
   const steps = useMemo(() => groupByStep(events), [events]);
+  const episodeTasks = useMemo(() => {
+    if (!task?.episode_root_task_id) return task ? [task] : [];
+    return allTasks
+      .filter((candidate) => candidate.episode_root_task_id === task.episode_root_task_id)
+      .sort((a, b) => a.id - b.id);
+  }, [allTasks, task]);
 
   const [msgInput, setMsgInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -76,8 +87,19 @@ export function TaskDetail({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-4 py-1.5 text-xs">
-        <span className="font-medium text-white">{task.role}</span>
+        <span className="font-medium text-white">{taskDisplayLabel(task)}</span>
         <StatusPill status={task.status} />
+        {task.episode_label && (
+          <span className="rounded bg-violet-500/15 px-2 py-0.5 text-[10px] text-violet-300">
+            {task.episode_label}
+          </span>
+        )}
+        {task.episode_phase && (
+          <span className="rounded bg-white/5 px-2 py-0.5 text-[10px] text-muted">
+            {phaseLabel(task.episode_phase)}
+            {task.episode_attempt != null ? ` · attempt ${task.episode_attempt}` : ""}
+          </span>
+        )}
         {task.status === "running" && task.current_action && (
           <ActivityBadge action={task.current_action} />
         )}
@@ -122,6 +144,30 @@ export function TaskDetail({
           </button>
         )}
       </div>
+      {episodeTasks.length > 1 && (
+        <div className="shrink-0 border-b border-border/40 bg-white/[0.02] px-4 py-2">
+          <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">Episode flow</div>
+          <div className="flex flex-wrap gap-1.5">
+            {episodeTasks.map((episodeTask) => (
+              <button
+                key={episodeTask.id}
+                type="button"
+                className={`rounded px-2 py-1 text-[11px] ${
+                  episodeTask.id === task.id
+                    ? "bg-accent/30 text-white"
+                    : "bg-white/5 text-gray-300 hover:bg-white/10"
+                }`}
+                onClick={() => onSelectTask(episodeTask.id)}
+              >
+                {taskDisplayLabel(episodeTask)}
+                <span className="ml-1 text-[10px] text-muted">
+                  {episodeTask.status}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-auto px-4 py-2">
         {steps.length === 0 && <p className="text-xs text-muted">No activity yet.</p>}
@@ -626,6 +672,32 @@ function valueToText(value: unknown): string {
 function truncateText(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max).trimEnd()}…`;
+}
+
+function phaseLabel(phase: string): string {
+  switch (phase) {
+    case "discover":
+      return "discover";
+    case "implement":
+      return "implement";
+    case "verify":
+      return "verify";
+    case "repair":
+      return "repair";
+    case "wrapup":
+      return "wrap-up";
+    case "review":
+      return "review";
+    case "summarize":
+      return "summary";
+    default:
+      return phase || "task";
+  }
+}
+
+function taskDisplayLabel(task: ChildTask): string {
+  if (task.episode_is_root && task.episode_label) return task.episode_label;
+  return phaseLabel(task.episode_phase || task.role);
 }
 
 function StatusPill({ status }: { status: string }) {

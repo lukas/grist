@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-**Grist** is a macOS Electron app for **supervising** a small typed manager-worker swarm on a **local git repo**: manager planner → scheduler (≤4 workers) → verifier/summarizer follow-ups, with git-first bootstrap and best-effort standalone Docker runtimes for code work. v0 prioritizes inspectability and operator control, not autonomy.
+**Grist** is a macOS Electron app for **supervising** a small typed manager-worker swarm on a **local git repo**: manager planner → thin scheduler (≤4 workers) → episode-style implementer/verifier/repair/wrap-up follow-ups, with git-first bootstrap and best-effort standalone Docker runtimes for code work. v0 prioritizes inspectability and operator control, not autonomy.
 
 ## Run / build
 
@@ -54,6 +54,8 @@ Everything is a **task**. The old "jobs" table is kept internally but hidden beh
 | Repos | `backend/db/*Repo.ts` |
 | **Root task facade** | `backend/db/rootTaskFacade.ts` |
 | Orchestrator | `backend/orchestrator/appOrchestrator.ts`, `planner.ts`, `scheduler.ts`, `workerRunner.ts`, `reducer.ts`, `verifier.ts` |
+| Scheduler helpers | `backend/orchestrator/scheduler/decisions.ts` |
+| Services | `backend/services/contractService.ts`, `memoryService.ts`, `reflectionService.ts`, `eventService.ts` |
 | Providers | `backend/providers/*` + `providerFactory.ts` |
 | Tools | `backend/tools/executeTool.ts`, `memoryTools.ts`, `controlTools.ts` |
 | Git/runtime bootstrap | `backend/workspace/gitRepoManager.ts`, `backend/runtime/taskRuntime.ts` |
@@ -73,7 +75,7 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 | `startTask` | Plan + start scheduler in one call |
 | `listRootTasks` | List root tasks (most recent first), optional repo filter |
 | `getRootTask` | Get root task by ID |
-| `getChildTasks` | Get child tasks for a root task (excludes root/planner kinds) |
+| `getChildTasks` | Get child tasks for a root task (excludes root/planner kinds) plus derived episode metadata (`episode_root_task_id`, `episode_label`, `episode_phase`, `episode_status`, `episode_attempt`) |
 | `getEventsForTask` | Events by task ID (no jobId needed) |
 | `getAllEvents` | All events for a root task's job |
 | `stopTask` | Stop a root task |
@@ -92,16 +94,24 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 |-----------|----------|
 | `App.tsx` | State: `rootTaskId`, `selectedTaskId`. Uses `createTask`/`startTask` to run. |
 | `MissionControl` | Header bar. Repo picker, provider dot, Skills button, pause/resume/stop via `rootTaskControl`. Repo dropdown includes `New repo…` and `Browse…`. |
-| `TaskList` | Left sidebar. Root tasks as expandable nodes, child tasks as tree. Filters out `root`/`planner` kinds. Task blocker `!` uses a single custom tooltip (no native `title` hover) and remains keyboard-focusable. |
-| `TaskDetail` | Main panel. Chat-style event view with operator message input. Loads events via `getEventsForTask(taskId)`. |
+| `TaskList` | Left sidebar. Root tasks as expandable nodes, child tasks as an episode-first tree. Episode roots now show aggregate episode status instead of only the root implementer task's raw status. Filters out `root`/`planner` kinds. Task blocker `!` uses a single custom tooltip (no native `title` hover) and remains keyboard-focusable. |
+| `TaskDetail` | Main panel. Chat-style event view with operator message input plus an episode flow strip for switching between phases inside the same episode. |
 | `SkillsModal` | Browse bundled skills, install/remove global + project skills. |
 
 ## Contracts / invariants
 
+- **System invariants**:
+  - Contracts are the only source of truth.
+  - Scheduler decides; helper services interpret.
+  - Memory is advisory, never authoritative.
+  - Episodes are the main unit of execution/debugging (`implementer -> verifier -> optional repair -> optional reflection -> wrap-up`).
+  - Discovery-style events may annotate or request replan, but they do not mutate contracts.
+  - Parallelism is conservative by default.
 - **Root task facade** — `rootTaskFacade.ts` wraps `insertJob` + `insertTask(kind='root')`. Root task ID is the only ID the frontend uses. `rootTaskToJobId()` resolves internally.
+- **Episode metadata is derived, not stored** — `rootTaskFacade.ts` now annotates child-task responses with episode root/phase/status/attempt metadata so the UI can present episode chains without a DB migration.
 - **Manager is a real task** — `planner.ts` inserts `kind=planner`, `role=manager` as child of root. The manager emits a schema-validated `manager_plan` artifact and all planner events attach to that task.
 - **Typed worker roles** — `task.role` is now a first-class contract (`scout`, `implementer`, `reviewer`, `verifier`, `summarizer`) instead of an arbitrary label. `backend/types/taskState.ts` holds the plan schema plus role-specific artifact contracts.
-- **Structured worker packets** — the manager sends scoped packets (`files`, `acceptance_criteria`, `non_goals`, `similar_patterns`, `constraints`, `commands_allowed`, `success_criteria`) through `scope_json`. `workerRunner.ts` turns those into role-specific prompts.
+- **Structured worker packets** — the manager sends scoped packets through `scope_json`. Every packet now carries `contract_json` with `inputs`, `outputs`, `file_ownership`, `acceptance_criteria`, and `non_goals`, and planner validation rejects dependency/output mismatches.
 - **Provider propagation** — CLI `create-task` now passes planner/reducer/verifier providers from `loadAppSettings()`, not just the default worker provider.
 - **Scheduler skips root/planner** — `NON_SCHEDULABLE_KINDS = {root, planner}`.
 - **Implementers get isolated worktrees** — `appOrchestrator.ts` provisions a dedicated worktree before an `implementer` starts. The worker loop no longer falls back to writing directly into the shared repo for isolated-worktree tasks.
@@ -114,6 +124,9 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
 - **Verifier follow-up is automatic** — when an `implementer` finishes successfully, `appOrchestrator.ts` spawns a `verifier` child task if one does not already exist.
 - **Verifier-driven repair is automatic** — when a verifier returns `passed: false`, `appOrchestrator.ts` now spawns a repair implementer child on the same worktree (capped depth 2) so the root run can continue fixing issues instead of only logging a warning.
 - **Post-verify wrap-up is automatic** — when a verifier passes for a non-wrap-up implementer, `appOrchestrator.ts` now spawns one wrap-up implementer on the same worktree to clean up code, update docs, prepare PR handoff, and persist useful memory notes.
+- **Contract enforcement is deterministic** — implementer writes are checked against `contract_json.file_ownership`. Out-of-scope writes persist `contract_violation` artifacts. Minor same-area drift continues to verification; major cross-boundary drift fails the episode and requests replan.
+- **Memory is service-owned** — planner/worker prompts read compact memory context through `memoryService.ts`. Direct worker `write_memory` is reserved for wrap-up/reflection-gated paths instead of arbitrary mid-task writes.
+- **Reflection is episode-local** — reflection is no longer a generic post-task phase. `reflectionService.ts` only persists memory after a verifier-backed pass when the episode was non-trivial (repair chain, contract violation, or multi-file change).
 - **Verified apply-back** — when a verifier passes, `appOrchestrator.ts` copies changed source files from the implementer worktree back into the canonical repo, skipping transient paths like `node_modules/`, `dist/`, `.git/`, and `.grist/`.
 - **Completion is verifier-gated** — `scheduler.ts` now treats the latest unresolved failing verifier in a repair chain as a blocking condition for job completion. Earlier failed verifiers become irrelevant once a descendant repair chain produces a passing verifier.
 - **Verifier checks are adaptive** — `verifier.ts` no longer assumes `npm test`. It now chooses the strongest available checks from explicit command, package-manager-aware `test`, `build`, and startup smoke checks. Missing tests alone should not fail a CLI project if build + startup smoke succeed.

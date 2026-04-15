@@ -36,6 +36,13 @@ declare global {
     git_branch: string;
     base_ref: string;
     runtime_json: string;
+    episode_root_task_id: number | null;
+    episode_label: string;
+    episode_phase: string;
+    episode_status: string;
+    episode_attempt: number | null;
+    episode_task_ids_json: string;
+    episode_is_root: boolean;
   }
 
   interface TaskEvent {

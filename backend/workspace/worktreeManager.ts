@@ -152,3 +152,19 @@ export function syncWorktreeToRepo(
 
   return { ok: true, copied, removed, skipped, stderr: "" };
 }
+
+export function listWorktreeSyncableChanges(
+  repoRoot: string,
+  worktreePath: string
+): { ok: boolean; files: string[]; removed: string[]; stderr: string } {
+  const tracked = getTrackedChanges(repoRoot, worktreePath);
+  if (!tracked.ok) return { ok: false, files: [], removed: [], stderr: tracked.stderr };
+  const untracked = getUntrackedChanges(worktreePath);
+  if (!untracked.ok) return { ok: false, files: [], removed: [], stderr: untracked.stderr };
+  return {
+    ok: true,
+    files: Array.from(new Set([...tracked.copy, ...untracked.files])),
+    removed: tracked.remove,
+    stderr: "",
+  };
+}

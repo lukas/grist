@@ -4,10 +4,21 @@ import { ARTIFACT_TYPES, WORKER_ROLES } from "./models.js";
 const WorkerRoleSchema = z.enum(WORKER_ROLES);
 const ArtifactTypeSchema = z.enum(ARTIFACT_TYPES);
 
+export const EpisodeContractSchema = z.object({
+  inputs: z.array(z.string()).optional().default([]),
+  outputs: z.array(z.string()).optional().default([]),
+  file_ownership: z.array(z.string()).optional().default([]),
+  acceptance_criteria: z.array(z.string()).optional().default([]),
+  non_goals: z.array(z.string()).optional().default([]),
+});
+
+export type EpisodeContract = z.infer<typeof EpisodeContractSchema>;
+
 export const WorkerPacketSchema = z.object({
   files: z.array(z.string()).optional().default([]),
   area: z.string().optional().default(""),
   workflow_phase: z.string().optional().default(""),
+  contract_json: EpisodeContractSchema.optional().default({}),
   acceptance_criteria: z.array(z.string()).optional().default([]),
   non_goals: z.array(z.string()).optional().default([]),
   similar_patterns: z.array(z.string()).optional().default([]),
@@ -167,6 +178,78 @@ export const VerifierOutputSchema = z.object({
 });
 
 export type VerifierOutput = z.infer<typeof VerifierOutputSchema>;
+
+export function defaultContractForRole(role: z.infer<typeof WorkerRoleSchema>, packet?: Partial<WorkerPacket>): EpisodeContract {
+  const packetFiles = packet?.files || [];
+  const packetAcceptance = packet?.acceptance_criteria || [];
+  const packetNonGoals = packet?.non_goals || [];
+  const fileOwnership = packetFiles.length > 0 ? packetFiles : ["**/*"];
+  switch (role) {
+    case "scout":
+      return EpisodeContractSchema.parse({
+        inputs: [],
+        outputs: ["findings_report"],
+        file_ownership: [],
+        acceptance_criteria: packetAcceptance,
+        non_goals: packetNonGoals,
+      });
+    case "implementer":
+      return EpisodeContractSchema.parse({
+        inputs: [],
+        outputs: ["candidate_patch"],
+        file_ownership: fileOwnership,
+        acceptance_criteria: packetAcceptance,
+        non_goals: packetNonGoals,
+      });
+    case "reviewer":
+      return EpisodeContractSchema.parse({
+        inputs: ["candidate_patch"],
+        outputs: ["review_report"],
+        file_ownership: [],
+        acceptance_criteria: packetAcceptance,
+        non_goals: packetNonGoals,
+      });
+    case "verifier":
+      return EpisodeContractSchema.parse({
+        inputs: ["candidate_patch"],
+        outputs: ["verification_result"],
+        file_ownership: [],
+        acceptance_criteria: packetAcceptance,
+        non_goals: packetNonGoals,
+      });
+    case "summarizer":
+      return EpisodeContractSchema.parse({
+        inputs: ["manager_plan", "candidate_patch", "verification_result"],
+        outputs: ["final_summary"],
+        file_ownership: [],
+        acceptance_criteria: packetAcceptance,
+        non_goals: packetNonGoals,
+      });
+  }
+}
+
+export function normalizeWorkerPacket(packet: Partial<WorkerPacket>, role?: z.infer<typeof WorkerRoleSchema>): WorkerPacket {
+  const parsed = WorkerPacketSchema.parse(packet || {});
+  const contract = role
+    ? EpisodeContractSchema.parse({
+      ...defaultContractForRole(role, parsed),
+      ...parsed.contract_json,
+      file_ownership: parsed.contract_json.file_ownership?.length
+        ? parsed.contract_json.file_ownership
+        : defaultContractForRole(role, parsed).file_ownership,
+      acceptance_criteria: parsed.contract_json.acceptance_criteria?.length
+        ? parsed.contract_json.acceptance_criteria
+        : parsed.acceptance_criteria,
+      non_goals: parsed.contract_json.non_goals?.length
+        ? parsed.contract_json.non_goals
+        : parsed.non_goals,
+    })
+    : EpisodeContractSchema.parse(parsed.contract_json);
+  return WorkerPacketSchema.parse({
+    ...parsed,
+    contract_json: contract,
+  });
+}
 
 export function expectedArtifactTypeForRole(role: z.infer<typeof WorkerRoleSchema>): z.infer<typeof ArtifactTypeSchema> {
   switch (role) {
