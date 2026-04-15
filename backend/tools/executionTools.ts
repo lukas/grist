@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { join, isAbsolute, normalize } from "node:path";
 import type { ToolContext, ToolResult } from "./toolTypes.js";
 import { buildRuntimeWrappedCommand } from "../runtime/taskRuntime.js";
+import { startBackgroundCommand, pollBackgroundCommand } from "./asyncCommandManager.js";
 
 function isDirectlyAllowed(command: string, allowlist: string[]): boolean {
   const c = command.trim();
@@ -196,6 +197,9 @@ export async function toolRunCommandSafe(
   args: { command: string; cwd?: string; timeoutMs?: number },
   abortSignal?: AbortSignal
 ): Promise<ToolResult> {
+  if (!args.command || typeof args.command !== "string") {
+    return { ok: false, error: "command argument is required and must be a string" };
+  }
   const timeoutMs = args.timeoutMs ?? 60_000;
   const cwd = resolveCommandCwd(ctx, args.cwd);
   const normalizedCommand = normalizeCommandForRuntime(args.command, ctx);
@@ -228,6 +232,38 @@ export async function toolRunLint(
 ): Promise<ToolResult> {
   const cmd = args.command || "npm run lint";
   return toolRunCommandSafe(ctx, { command: cmd, timeoutMs: 120_000 }, abortSignal);
+}
+
+export async function toolRunCommandBg(
+  ctx: ToolContext,
+  args: { command: string; cwd?: string; timeoutMs?: number },
+): Promise<ToolResult> {
+  if (!args.command || typeof args.command !== "string") {
+    return { ok: false, error: "command argument is required and must be a string" };
+  }
+  const cwd = resolveCommandCwd(ctx, args.cwd);
+  const normalizedCommand = normalizeCommandForRuntime(args.command, ctx);
+  if (!isAllowed(normalizedCommand, ctx.commandAllowlist)) {
+    return { ok: false, error: `Command not in allowlist: ${args.command}` };
+  }
+  const wrapped = buildRuntimeWrappedCommand(ctx.runtime, normalizedCommand, cwd, ctx.worktreePath);
+  const result = startBackgroundCommand(
+    ctx.taskId,
+    wrapped.command,
+    wrapped.cwd,
+    args.timeoutMs ?? 600_000,
+    ctx.commandEnv,
+  );
+  return { ok: true, data: { command_id: result.id, command: args.command, status: "running" } };
+}
+
+export function toolPollCommand(
+  ctx: ToolContext,
+  args: { command_id: string },
+): ToolResult {
+  const result = pollBackgroundCommand(args.command_id);
+  if (!result) return { ok: false, error: `No background command with id: ${args.command_id}` };
+  return { ok: true, data: result };
 }
 
 export const __executionToolInternals = {

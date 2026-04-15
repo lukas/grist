@@ -131,6 +131,14 @@ declare global {
       removeSkill(p: { skillId: string; scope: "global" | "project"; repoPath?: string }): Promise<boolean>;
       readSkill(p: { skillId: string; scope?: "global" | "project"; repoPath?: string; file?: string }): Promise<SkillSummary & { content?: string; body?: string }>;
 
+      getParallelismInfo(): Promise<{ maxWorkers: number; cpuCores: number; freeMemMb: number; totalMemMb: number; urgency: string }>;
+      setUrgency(level: string): Promise<boolean>;
+
+      listRemoteWorkers(): Promise<Array<{ id: string; host: string; user: string; maxSlots: number; activeSlots: number; status: string; capabilities: string[] }>>;
+      addRemoteWorker(config: { host: string; user?: string; sshPort?: number; workDir?: string; maxSlots?: number }): Promise<{ id: string }>;
+      removeRemoteWorker(id: string): Promise<boolean>;
+      checkRemoteWorker(id: string): Promise<{ ok: boolean; latencyMs: number; error?: string }>;
+
       openPath(p: string): Promise<string>;
       logsDir(rootTaskId: number): Promise<string>;
 

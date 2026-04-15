@@ -36,6 +36,16 @@ export const IPC = {
   removeSkill: "grist:removeSkill",
   readSkill: "grist:readSkill",
 
+  // Parallelism
+  getParallelismInfo: "grist:getParallelismInfo",
+  setUrgency: "grist:setUrgency",
+
+  // Remote workers
+  listRemoteWorkers: "grist:listRemoteWorkers",
+  addRemoteWorker: "grist:addRemoteWorker",
+  removeRemoteWorker: "grist:removeRemoteWorker",
+  checkRemoteWorker: "grist:checkRemoteWorker",
+
   // Utility
   openPath: "grist:openPath",
   logsDir: "grist:logsDir",

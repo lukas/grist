@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-**Grist** is a macOS Electron app for **supervising** a small typed manager-worker swarm on a **local git repo**: manager planner → thin scheduler (≤4 workers) → episode-style implementer/verifier/repair/wrap-up follow-ups, with git-first bootstrap and best-effort standalone Docker runtimes for code work. v0 prioritizes inspectability and operator control, not autonomy.
+**Grist** is a macOS Electron app for **supervising** a typed manager-worker swarm on a **local git repo**: manager planner → dynamically-scaled scheduler → episode-style implementer/verifier/repair/wrap-up follow-ups, with git-first bootstrap, best-effort Docker runtimes, speculative execution (best-of-N), async background commands, agent-initiated questions, LLM-powered supervisor trajectory review, worker-initiated subtasks, and an SSH-based multi-machine worker pool.
 
 ## Run / build
 
@@ -57,7 +57,12 @@ Everything is a **task**. The old "jobs" table is kept internally but hidden beh
 | Scheduler helpers | `backend/orchestrator/scheduler/decisions.ts` |
 | Services | `backend/services/contractService.ts`, `memoryService.ts`, `reflectionService.ts`, `eventService.ts` |
 | Providers | `backend/providers/*` + `providerFactory.ts` |
-| Tools | `backend/tools/executeTool.ts`, `memoryTools.ts`, `controlTools.ts` |
+| Tools | `backend/tools/executeTool.ts`, `memoryTools.ts`, `controlTools.ts`, `subtaskTools.ts` |
+| Async commands | `backend/tools/asyncCommandManager.ts` — background command lifecycle |
+| Best-of-N | `backend/orchestrator/bestOfN.ts` — speculative execution groups |
+| Supervisor | `backend/orchestrator/supervisor.ts` — periodic LLM trajectory review |
+| Parallelism | `backend/orchestrator/parallelism.ts` — dynamic worker scaling |
+| Worker pool | `backend/workers/workerPool.ts` — SSH-based remote worker management |
 | Git/runtime bootstrap | `backend/workspace/gitRepoManager.ts`, `backend/runtime/taskRuntime.ts` |
 | Memory | `backend/memory/memoryManager.ts` — `~/.grist/` (global) + `<repo>/.grist/` (project) |
 | Skills | `backend/skills/skillManager.ts`, `backend/tools/skillTools.ts`, `cli/skillsCliCore.ts` |
@@ -139,12 +144,19 @@ The frontend uses **only** the unified task API. No `jobId` anywhere in the rend
   - **Tier 3 — Token-budget-aware**: triggers based on estimated token count. Compaction events emitted so UI can show when compaction occurs.
   - History is replaced in-place after summarization so subsequent steps use the compact version.
 - **Skill system** — skills are declarative instruction packs, not executable plugins. Bundled skills live in `bundled-skills/`; installs copy them to `~/.grist/skills/` or `<repo>/.grist/skills/`. The worker prompt includes a compact installed-skill index from `buildSkillIndex()`, and tasks can explicitly call `list_skills` / `read_skill` to load full instructions. Project skills override same-id global skills for visibility.
-- **Write scope is enforced** — `write_file` and `apply_patch` reject out-of-scope writes using `task.scope_json.files`. Planner/worker prompts now default empty repos to a single writer owning bootstrap + integration unless independence is explicit, because isolated worktrees do not share unmerged code.
+- **Write scope is enforced** — `write_file` and `apply_patch` reject out-of-scope writes using `task.scope_json.files`. Glob patterns (`**/*`, `src/**`) are supported via `matchesGlob()`. Planner/worker prompts now default empty repos to a single writer owning bootstrap + integration unless independence is explicit, because isolated worktrees do not share unmerged code.
 - **Repo tools are worktree-aware** — `list_files`, `read_file`, `grep_code`, and git-history helpers now read from `worktreePath` when present, so implementers inspect the same checkout they are editing.
 - **Wrap-up prompts are explicit** — worker prompts now recognize `workflow_phase: "wrapup"` packets and steer the agent toward polish/docs/PR/memory work instead of large new feature churn.
 - **Parallelism is role-aware** — the manager merges parallel implementers when ownership is not independent and appends a summarizer task when missing.
 - **Repo creation UX** — the renderer can open `CreateRepoDialog`, which asks for a repo name plus optional parent directory. Main process creates repos under `~/grist-repos/<name>` by default and runs `git init`.
-- **Explicit resume extends budget** — manual resume paths (`taskControl enqueue`, `resume_all`) now increase `max_steps` and `max_tokens`, emit a `budget_extended` event, clear the blocker, and then requeue the task. There is still no parent-agent review loop for paused children.
+- **Explicit resume extends budget** — manual resume paths (`taskControl enqueue`, `resume_all`) now increase `max_steps` and `max_tokens`, emit a `budget_extended` event, clear the blocker, and then requeue the task.
+- **`ask_user` tool** — agents can ask structured questions with options. Task pauses, UI renders option buttons, user's answer resumes via the existing message mechanism.
+- **Async commands** — `run_command_bg` starts a background command (10min timeout), returns `command_id`. `poll_command` checks status. Agents continue reasoning while builds/tests run.
+- **Best-of-N speculative execution** — planner can annotate tasks with `speculative_approaches`. `bestOfN.ts` spawns N competing implementations, verifies each, picks the winner. Losing candidates are superseded.
+- **Supervisor agent** — `supervisor.ts` runs every 60s per job. Reviews running workers' trajectories via the planner model. Verdicts: continue, warn, redirect (injects advice), pause.
+- **Worker-initiated subtasks** — `spawn_subtask` creates up to 3 parallel child implementers. `poll_subtask` checks completion. Subtasks get isolated worktrees and cannot recursively spawn.
+- **Dynamic parallelism** — `parallelism.ts` computes max workers from CPU cores, free memory, urgency setting (low/normal/high/max), and remote slots. Adapts every scheduler tick.
+- **Multi-machine worker pool** — `workerPool.ts` manages SSH-based remote workers: register, health-check, run commands, rsync file sync. Remote slots are included in the dynamic parallelism calculation.
 
 ## Provider env / settings
 
@@ -189,3 +201,4 @@ Uses the unified task API. Key commands: `run`, `list`, `subtasks`, `status`, `s
 | 2026-04-13 | Greenfield planner hardening: empty repos now collapse to a single writer by default, and implementer prompts warn that sibling worktrees are not shared state. |
 | 2026-04-14 | End-of-task pipeline hardening: verifier failures can spawn capped repair implementers on the same worktree, passing verifiers can spawn one wrap-up implementer for cleanup/docs/PR/memory, verified outputs sync back to the canonical repo, repo read/list tools follow the active worktree, and the scheduler no longer completes a run while the latest relevant verifier is still failing. |
 | 2026-04-14 | CLI verification/runtime hardening: Node runtimes now skip bare CLI `start` scripts, runtime-safe commands normalize redundant `/workspace` prefixes, and verifiers use adaptive build/test/startup checks instead of always treating missing `npm test` as a failure. |
+| 2026-04-15 | Backgammon retro fixes: glob-aware scope enforcement (`matchesGlob`), CLI `message`/`respond` import fix, `runTaskWorkerSafe` crash wrapper, null guards in `run_command_safe`/`run_command_bg`, greenfield collapse allows sequential `depends_on` chains, worker prompt hardened for `ask_user` on repeated failures and background test execution. See `docs/backgammon-run-retro.md`. |

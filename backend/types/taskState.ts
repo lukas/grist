@@ -35,6 +35,7 @@ export const PlannedWorkerTaskSchema = z.object({
   packet: WorkerPacketSchema.optional().default({}),
   max_steps: z.number().int().positive().optional().default(20),
   depends_on: z.array(z.number().int().nonnegative()).optional().default([]),
+  speculative_approaches: z.array(z.string()).optional(),
 });
 
 export type PlannedWorkerTask = z.infer<typeof PlannedWorkerTaskSchema>;
@@ -80,7 +81,7 @@ export const ReviewerArtifactContentSchema = z.object({
 export type ReviewerArtifactContent = z.infer<typeof ReviewerArtifactContentSchema>;
 
 export const WorkerDecisionSchema = z.object({
-  decision: z.enum(["call_tool", "call_tools", "finish", "pause_self"]),
+  decision: z.enum(["call_tool", "call_tools", "finish", "pause_self", "ask_user"]),
   reasoning_summary: z.string().optional().default(""),
   expected_information_gain: z.number().optional(),
   // Single tool call (call_tool)
@@ -127,6 +128,13 @@ export const WorkerDecisionSchema = z.object({
         content: z.unknown(),
       }),
     ])
+    .optional(),
+  user_question: z
+    .object({
+      question: z.string(),
+      options: z.array(z.string()).optional().default([]),
+      context: z.string().optional().default(""),
+    })
     .optional(),
   task_state_update: z
     .object({

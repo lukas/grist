@@ -1,105 +1,148 @@
+import { getTask, insertTask, updateTask, listTasksForJob } from "../db/taskRepo.js";
+import { getJob } from "../db/jobRepo.js";
+import { insertEvent } from "../db/eventRepo.js";
+import { getLatestArtifactForTask } from "../db/artifactRepo.js";
 import type { ToolContext, ToolResult } from "./toolTypes.js";
-import { insertTask, updateTask, getTask } from "../db/taskRepo.js";
 import { scratchpadPath } from "../workspace/pathUtils.js";
 import { ensureScratchpad } from "../workspace/scratchpadManager.js";
 
-interface SubtaskSpec {
-  goal: string;
-  role?: string;
-  can_write?: boolean;
+const SUBTASK_EXCLUDED_TOOLS = new Set(["remove_worktree", "create_worktree", "spawn_subtask", "poll_subtask"]);
+
+function getSubtaskAllowedTools(): string[] {
+  // Inline the standard tool list to avoid circular dependency with executeTool.ts
+  const all = [
+    "list_files", "grep_code", "read_file", "read_git_history", "list_changed_files",
+    "read_artifacts", "write_artifact", "read_scratchpad", "write_scratchpad", "append_scratchpad",
+    "run_tests", "run_lint", "run_command_safe", "write_file", "apply_patch",
+    "get_worktree_diff", "emit_progress_event", "pause_self", "ask_user",
+    "write_memory", "read_memory", "list_skills", "read_skill",
+    "run_command_bg", "poll_command",
+  ];
+  return all.filter((n) => !SUBTASK_EXCLUDED_TOOLS.has(n));
 }
 
-const WRITE_DENY = new Set(["write_file", "apply_patch", "create_worktree", "remove_worktree"]);
-
-export function toolSpawnSubtasks(
+export function toolSpawnSubtask(
   ctx: ToolContext,
-  args: { tasks: SubtaskSpec[]; wait?: boolean },
+  args: { goal: string; files?: string[]; approach?: string },
 ): ToolResult {
-  const { tasks, wait = true } = args;
-
-  if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
-    return { ok: false, error: "tasks must be a non-empty array of {goal, role?, can_write?}" };
-  }
-  if (tasks.length > 10) {
-    return { ok: false, error: "max 10 subtasks per spawn" };
+  const parentTask = getTask(ctx.taskId);
+  const job = parentTask ? getJob(parentTask.job_id) : undefined;
+  if (!parentTask || !job) {
+    return { ok: false, error: "Parent task or job not found" };
   }
 
-  const parent = getTask(ctx.taskId);
-  if (!parent) return { ok: false, error: "parent task not found" };
-
-  // Derive child tool lists from parent's allowed tools
-  const parentTools = JSON.parse(parent.allowed_tools_json) as string[];
-  const writeTools = parentTools.includes("spawn_subtasks") ? parentTools : [...parentTools, "spawn_subtasks"];
-  const readTools = writeTools.filter((n) => !WRITE_DENY.has(n));
-
-  const taskIds: number[] = [];
-  const labels: string[] = [];
-
-  for (const spec of tasks) {
-    if (!spec.goal || typeof spec.goal !== "string") continue;
-
-    const canWrite = spec.can_write ?? true;
-    const role = spec.role || spec.goal.slice(0, 40).replace(/[^a-zA-Z0-9_-]/g, "_");
-    const allowed = canWrite ? writeTools : readTools;
-
-    const id = insertTask({
-      job_id: parent.job_id,
-      parent_task_id: parent.id,
-      kind: canWrite ? "patch_writer" : "analysis",
-      role,
-      goal: spec.goal,
-      scope_json: "{}",
-      status: "queued",
-      priority: parent.priority - 1,
-      assigned_model_provider: parent.assigned_model_provider,
-      write_mode: canWrite ? "worktree" : "none",
-      workspace_repo_mode: canWrite ? "isolated_worktree" : "shared_read_only",
-      scratchpad_path: "",
-      worktree_path: canWrite ? null : parent.worktree_path,
-      git_branch: "",
-      base_ref: parent.base_ref,
-      runtime_json: "{}",
-      max_steps: 30,
-      max_tokens: 48000,
-      current_action: "queued",
-      next_action: "start",
-      blocker: "",
-      confidence: 0,
-      files_examined_json: "[]",
-      findings_json: "[]",
-      open_questions_json: "[]",
-      dependencies_json: "[]",
-      allowed_tools_json: JSON.stringify(allowed),
-      artifact_type: canWrite ? "candidate_patch" : "findings_report",
-    });
-
-    const sp = scratchpadPath(ctx.appWorkspaceRoot, parent.job_id, id);
-    updateTask(id, { scratchpad_path: sp });
-    ensureScratchpad(sp);
-
-    taskIds.push(id);
-    labels.push(role);
+  if (parentTask.role !== "implementer") {
+    return { ok: false, error: `Only implementers can spawn subtasks, not ${parentTask.role}` };
   }
 
-  if (taskIds.length === 0) {
-    return { ok: false, error: "no valid subtask specs provided" };
+  const existingChildren = listTasksForJob(parentTask.job_id).filter(
+    (t) => t.parent_task_id === parentTask.id && t.role === "implementer" && t.kind === "patch_writer"
+      && !["done", "failed", "stopped", "superseded"].includes(t.status)
+  );
+  if (existingChildren.length >= 3) {
+    return { ok: false, error: "Maximum 3 active subtasks per parent. Wait for existing subtasks to complete." };
   }
 
-  if (wait) {
-    updateTask(ctx.taskId, {
-      status: "blocked",
-      blocker: `waiting for subtasks: ${taskIds.join(",")}`,
-      current_action: "waiting_subtasks",
-    });
-  }
-
-  ctx.emit("info", "subtasks_spawned", `Spawned ${taskIds.length} subtasks: ${labels.join(", ")}`, {
-    taskIds, labels, wait,
+  const fileOwnership = args.files && args.files.length > 0 ? args.files : ["**/*"];
+  const scopeJson = JSON.stringify({
+    files: args.files || [],
+    contract_json: {
+      inputs: [],
+      outputs: ["candidate_patch"],
+      file_ownership: fileOwnership,
+      acceptance_criteria: [],
+      non_goals: [],
+    },
   });
 
-  const msg = wait
-    ? `Spawned ${taskIds.length} subtasks (${labels.join(", ")}). You are now blocked until they finish. Their summaries will appear in your context when they complete.`
-    : `Spawned ${taskIds.length} subtasks (${labels.join(", ")}). They run in parallel — results will appear in your context as they finish. You can keep working.`;
+  const subtaskId = insertTask({
+    job_id: parentTask.job_id,
+    parent_task_id: parentTask.id,
+    kind: "patch_writer",
+    role: "implementer",
+    goal: args.approach ? `${args.goal}\n\nApproach: ${args.approach}` : args.goal,
+    scope_json: scopeJson,
+    status: "queued",
+    priority: parentTask.priority + 5,
+    assigned_model_provider: parentTask.assigned_model_provider,
+    write_mode: "worktree",
+    workspace_repo_mode: "isolated_worktree",
+    scratchpad_path: "",
+    worktree_path: null,
+    git_branch: "",
+    base_ref: parentTask.base_ref || "",
+    runtime_json: "{}",
+    max_steps: Math.min(parentTask.max_steps, 24),
+    max_tokens: Math.min(parentTask.max_tokens, 120_000),
+    current_action: "subtask_init",
+    next_action: "start",
+    blocker: "",
+    confidence: 0,
+    files_examined_json: "[]",
+    findings_json: "[]",
+    open_questions_json: "[]",
+    dependencies_json: "[]",
+    allowed_tools_json: JSON.stringify(getSubtaskAllowedTools()),
+    artifact_type: "candidate_patch",
+  });
 
-  return { ok: true, data: { taskIds, labels, wait, message: msg } };
+  const sp = scratchpadPath(ctx.appWorkspaceRoot, parentTask.job_id, subtaskId);
+  updateTask(subtaskId, { scratchpad_path: sp });
+  ensureScratchpad(sp);
+
+  insertEvent({
+    job_id: parentTask.job_id,
+    task_id: subtaskId,
+    level: "info",
+    type: "subtask_spawned",
+    message: `Subtask spawned by parent task ${parentTask.id}: ${args.goal.slice(0, 100)}`,
+    data_json: JSON.stringify({ parentTaskId: parentTask.id, goal: args.goal, files: args.files }),
+  });
+
+  return {
+    ok: true,
+    data: {
+      subtask_id: subtaskId,
+      goal: args.goal,
+      status: "queued",
+      message: "Subtask created. Use poll_subtask to check when it's done.",
+    },
+  };
+}
+
+export function toolPollSubtask(
+  ctx: ToolContext,
+  args: { subtask_id: number },
+): ToolResult {
+  const subtask = getTask(args.subtask_id);
+  if (!subtask) {
+    return { ok: false, error: `Subtask ${args.subtask_id} not found` };
+  }
+  if (subtask.parent_task_id !== ctx.taskId) {
+    return { ok: false, error: `Subtask ${args.subtask_id} is not a child of the current task` };
+  }
+
+  const done = ["done", "failed", "stopped", "superseded"].includes(subtask.status);
+  const result: Record<string, unknown> = {
+    subtask_id: subtask.id,
+    status: subtask.status,
+    done,
+    goal: subtask.goal,
+    steps_used: subtask.steps_used,
+    current_action: subtask.current_action,
+    blocker: subtask.blocker || null,
+  };
+
+  if (done) {
+    const artifact = getLatestArtifactForTask(subtask.id, "candidate_patch") as { content_json: string } | undefined;
+    if (artifact) {
+      try {
+        result.artifact = JSON.parse(artifact.content_json);
+      } catch {
+        result.artifact = artifact.content_json;
+      }
+    }
+  }
+
+  return { ok: true, data: result };
 }

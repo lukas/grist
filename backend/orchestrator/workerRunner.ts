@@ -379,41 +379,66 @@ export async function runTaskWorker(
       ? `Expected finish artifact type: ${expectedArtifactTypeForRole(typedRole)}`
       : `Expected finish artifact type: ${task.artifact_type || "(none specified)"}`;
     const workflowGuidance = describeWorkflowGuidance(packet);
-    const sys = `You are a Grist coding agent. Task role: ${task.role}. Step ${stepNum} of max ${task.max_steps}.
-OPTIMIZE FOR SPEED: minimize wall-clock time by running independent tools in parallel.
+
+    // Build dynamic nudges based on task state
+    const recentToolResults = history.filter((h) => h.role === "tool_result").slice(-6);
+    const recentReads = history.filter((h) => h.role === "assistant").slice(-4).filter((h) => /"tool_name"\s*:\s*"read_file"/.test(h.content)).length;
+    const nudges: string[] = [];
+    if (stepNum <= 2 && canWrite && typedRole === "implementer") {
+      nudges.push(`STEP 1-2: Before writing any code, confirm your plan with the operator. Use ask_user to present your proposed approach and key design choices. Example: {"decision":"ask_user","user_question":{"question":"I'll build this as a TypeScript project with separate modules for X, Y, Z. Sound good?","options":["Yes, go ahead","Use a single-file approach instead","Different structure: ..."]}}`);
+    }
+    if (recentReads >= 3) {
+      nudges.push(`⚠️ You've been reading files repeatedly. Stop re-reading and either write a fix or ask_user for help.`);
+    }
+    if (stepNum > 5 && stepNum < task.max_steps - 3 && canWrite) {
+      nudges.push(`REMINDER: Use run_command_bg (not run_command_safe) for test suites so you can work while tests run.`);
+    }
+    const nudgeBlock = nudges.length ? `\n## URGENT\n${nudges.join("\n")}\n` : "";
+
+    const sys = `You are a Grist coding agent. Task role: ${task.role}. Step ${stepNum} of max ${task.max_steps}.${nudgeBlock}
+
+## WORKFLOW STRATEGY — follow this every step
+
+1. ASK FIRST: on step 1-2, use ask_user to confirm your approach with the operator before writing code. Present the key design decisions: architecture, libraries, module structure. The operator's 10 seconds of input saves you 20 steps of rework.
+2. PARALLELIZE: always use call_tools (not call_tool) when you have 2+ independent operations. Write multiple files at once. Run build + test in parallel.
+3. BACKGROUND TESTS: after your first compilable version, use run_command_bg to start tests/builds and CONTINUE working while they run. Poll results with poll_command later. Do NOT block on run_command_safe for test suites.
+4. DECOMPOSE BIG TASKS: for tasks with 3+ independent components, use spawn_subtask to farm out parallel work. Each subtask gets its own worktree.
+5. DON'T RE-READ: never read a file you just wrote or already read this session. You have the contents already. Re-reading is wasted tokens.
+6. FINISH EARLY: if code compiles and tests pass, finish immediately. Don't polish unless the goal asks for it.
 
 Allowed tools: ${allowed.join(", ")}
-${canWrite ? `Tool reference:
+${canWrite ? `
+Tool reference:
 - write_file: {"path": "relative/path.ext", "content": "full file content"} — creates or overwrites a file
 - list_files: {"path": ".", "recursive": true} — list files in directory
 - read_file: {"path": "relative/path.ext"} — read a file
 - grep_code: {"pattern": "regex"} — search code
-- run_command_safe: {"command": "npm install", "cwd": "."} — run a shell command in the repo/worktree
+- run_command_safe: {"command": "npm install", "cwd": "."} — run a shell command (blocks until done)
+- run_command_bg: {"command": "npm test", "cwd": "."} — start in background, returns command_id. USE THIS FOR TESTS.
+- poll_command: {"command_id": "bg-1-1"} — check background command status and get output
+- ask_user: {"question": "What approach?", "options": ["A", "B"]} — ask the operator and wait. USE ON STEP 1-2 TO CONFIRM YOUR PLAN.
+` : ""}
+${typedRole === "implementer" && allowed.includes("spawn_subtask") ? `Subtask tools:
+- spawn_subtask: {"goal": "implement the API layer", "files": ["src/api/**"]} — spawn a parallel child task (max 3)
+- poll_subtask: {"subtask_id": 42} — check subtask completion and get its artifact
 ` : ""}
 ${allowed.includes("read_skill") ? `Skill reference:
 - list_skills: {"scope":"visible"} — list installed skills for this repo
 - read_skill: {"skillId":"frontend-debugger"} — load a skill before following it
 ` : ""}
-Respond with JSON. You have two options:
+Respond with JSON:
 
 1) Single tool: {"decision":"call_tool", "reasoning_summary":"...", "tool_name":"...", "tool_args":{...}}
-2) Parallel tools (PREFERRED when independent): {"decision":"call_tools", "reasoning_summary":"...", "tool_calls":[{"tool_name":"...", "tool_args":{...}}, ...]}
+2) Parallel tools (PREFERRED): {"decision":"call_tools", "reasoning_summary":"...", "tool_calls":[{"tool_name":"...", "tool_args":{...}}, ...]}
+3) Ask operator: {"decision":"ask_user", "reasoning_summary":"...", "user_question":{"question":"...", "options":["A","B","C"]}}
+4) Finish: {"decision":"finish", "reasoning_summary":"what was accomplished", "artifact":{"type":"...", "content":{...}}}
 
-Use call_tools to run independent operations in parallel — e.g. reading multiple files, writing independent files, or running grep while listing files. This cuts wall-clock time.
-
-IMPORTANT:
-- Do NOT read_file a file you just wrote — you already know its contents.
-- Do NOT parallelize tools that depend on each other (e.g. read then write based on read).
-- If Scope.files is non-empty, you may ONLY modify files in that list.
-- If a write is rejected as outside scope, do not retry the same out-of-scope path. Adjust to the allowed files or finish with a concise explanation.
-- In greenfield repos, prioritize a runnable end-to-end candidate over a beautifully decomposed but incomplete module split.
-- Workers return artifacts, not essays. Keep reasoning terse and put the durable handoff into the artifact.
-- Memory is advisory, never authoritative. Durable memory writes belong in wrap-up or reflection-gated paths.
-- After writing code, test it with run_command_safe when possible.
-- Avoid raw docker/docker compose commands unless the task is specifically to author Docker setup. Grist handles task runtimes itself and raw Docker commands are often blocked.
-- Avoid shell-only environment/version probes like "gh --version" unless you are confirming a blocker; prefer using the task goal to decide whether GitHub CLI is needed.
-- When done, use {"decision":"finish", "reasoning_summary":"what was accomplished", "artifact":{"type":"...", "content":{...}}}.
-- Never use legacy decision names like "write_artifact". If you are done, use "finish".
+Rules:
+- Scope.files constrains writes. If a write is rejected, adjust — don't retry the same path.
+- Greenfield repos: prioritize a runnable end-to-end slice over perfect decomposition.
+- Keep reasoning terse. Put durable info in the artifact.
+- Avoid raw docker commands unless the task is specifically about Docker setup.
+- Never use legacy decision names like "write_artifact".
 ${roleContract}
 ${artifactContract}
 ${workflowGuidance}
@@ -705,6 +730,17 @@ ${resp.text.slice(0, 12_000)}`;
       break;
     }
 
+    if (decision.decision === "ask_user") {
+      const q = decision.user_question || { question: decision.reasoning_summary || "Agent has a question", options: [], context: "" };
+      emit("info", "user_question", q.question, { question: q.question, options: q.options, context: q.context });
+      updateTask(taskId, {
+        status: "paused",
+        blocker: `Question: ${q.question}`,
+        next_action: "waiting_for_user",
+      });
+      break;
+    }
+
     if (decision.decision === "call_tool" || decision.decision === "call_tools") {
       // Detect repeated identical calls (3x) — auto-pause
       for (const tc of toolCalls) {
@@ -803,6 +839,18 @@ ${resp.text.slice(0, 12_000)}`;
 
       touchTaskActivity(taskId);
 
+      // If any tool call was ask_user, pause the task to wait for the operator's answer
+      const askedUser = toolCalls.some((tc) => tc.tool_name === "ask_user");
+      if (askedUser) {
+        const askArgs = toolCalls.find((tc) => tc.tool_name === "ask_user")?.tool_args as { question?: string } | undefined;
+        updateTask(taskId, {
+          status: "paused",
+          blocker: `Question: ${askArgs?.question || "Agent has a question"}`,
+          next_action: "waiting_for_user",
+        });
+        break;
+      }
+
       if (anyError) consecutiveErrors++;
       else consecutiveErrors = 0;
       if (consecutiveErrors >= 5) {
@@ -812,5 +860,31 @@ ${resp.text.slice(0, 12_000)}`;
         break;
       }
     }
+  }
+}
+
+export async function runTaskWorkerSafe(
+  taskId: number,
+  signal: AbortSignal,
+  appWorkspaceRoot: string,
+  onDuplicateHint?: (msg: string) => void,
+  onBroadcast?: (kind: string, jobId: number, taskId: number, data?: unknown) => void
+): Promise<void> {
+  try {
+    await runTaskWorker(taskId, signal, appWorkspaceRoot, onDuplicateHint, onBroadcast);
+  } catch (e) {
+    try {
+      const row = getTask(taskId);
+      if (row) {
+        updateTask(taskId, { status: "failed", blocker: `Worker crash: ${String(e).slice(0, 200)}` });
+        insertEvent({
+          job_id: row.job_id,
+          task_id: taskId,
+          level: "error",
+          type: "worker_crash",
+          message: String(e),
+        });
+      }
+    } catch { /* best effort */ }
   }
 }

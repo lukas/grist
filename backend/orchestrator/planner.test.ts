@@ -80,7 +80,7 @@ describe("planner greenfield guardrails", () => {
     );
 
     expect(prompt.system).toContain("Empty-repo guidance:");
-    expect(prompt.system).toContain("Default to exactly one implementer");
+    expect(prompt.system).toContain("default to one implementer that bootstraps");
     expect(prompt.system).toContain("runnable vertical slice");
   });
 

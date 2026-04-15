@@ -3,15 +3,19 @@ import { insertEvent } from "../db/eventRepo.js";
 import { getJob, updateJob } from "../db/jobRepo.js";
 import {
   MAX_PARALLEL_WORKERS,
+  getMaxParallelWorkers,
   depsSatisfied,
   reducerCanRun,
   schedulable,
   terminalJobOutcome,
 } from "./scheduler/decisions.js";
+import { runSupervisorCheck, SUPERVISOR_INTERVAL_MS } from "./supervisor.js";
 
 const STALL_WARN_MS = 30_000;
 const STALL_PAUSE_MS = 5 * 60_000;
 const STALL_FAIL_MS = 15 * 60_000;
+
+const lastSupervisorCheck = new Map<number, number>();
 
 export interface SchedulerHooks {
   onStartWorker: (taskId: number) => void;
@@ -83,7 +87,8 @@ export function runSchedulerTick(jobId: number, hooks: SchedulerHooks): void {
 
   tasks = listTasksForJob(jobId);
   const running = tasks.filter((t) => t.status === "running" && schedulable(t));
-  let slots = MAX_PARALLEL_WORKERS - running.length;
+  const maxWorkers = getMaxParallelWorkers();
+  let slots = maxWorkers - running.length;
   if (slots <= 0) return;
 
   const ready = tasks
@@ -117,6 +122,12 @@ export function runSchedulerTick(jobId: number, hooks: SchedulerHooks): void {
           ? `Job completed with warnings: ${softFailed.map((task) => task.role).join(", ")} failed but core delivery succeeded`
           : "All tasks completed",
     });
+  }
+
+  const lastCheck = lastSupervisorCheck.get(jobId) || 0;
+  if (Date.now() - lastCheck > SUPERVISOR_INTERVAL_MS) {
+    lastSupervisorCheck.set(jobId, Date.now());
+    void runSupervisorCheck(jobId).catch(() => {});
   }
 }
 

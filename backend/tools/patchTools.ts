@@ -71,13 +71,25 @@ export function toolRemoveWorktree(ctx: ToolContext): ToolResult {
   return { ok: true, data: { removed: true } };
 }
 
+function matchesGlob(pattern: string, path: string): boolean {
+  if (pattern === "**/*" || pattern === "**" || pattern === "*") return true;
+  if (pattern.endsWith("/**") || pattern.endsWith("/**/*")) {
+    const prefix = pattern.replace(/\/\*\*(?:\/\*)?$/, "");
+    return path.startsWith(prefix + "/") || path === prefix;
+  }
+  if (pattern.includes("*")) {
+    const re = new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*") + "$");
+    return re.test(path);
+  }
+  return path === pattern;
+}
+
 function assertPathInScope(ctx: ToolContext, relPath: string): void {
   const scopeFiles = ctx.scopeFiles?.map(normalizeRelativePath).filter(Boolean);
   if (!scopeFiles || scopeFiles.length === 0) return;
   const candidate = normalizeRelativePath(relPath);
-  if (!scopeFiles.includes(candidate)) {
-    throw new Error(`Write outside task scope: ${relPath} (allowed: ${scopeFiles.join(", ")})`);
-  }
+  if (scopeFiles.some((pattern) => matchesGlob(pattern, candidate))) return;
+  throw new Error(`Write outside task scope: ${relPath} (allowed: ${scopeFiles.join(", ")})`);
 }
 
 function normalizeRelativePath(relPath: string): string {

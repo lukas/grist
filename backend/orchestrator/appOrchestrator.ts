@@ -7,7 +7,8 @@ import { listEvents, listEventsForTask, listJobLevelEvents } from "../db/eventRe
 import { insertEvent } from "../db/eventRepo.js";
 import { runPlanner } from "./planner.js";
 import { runSchedulerTick } from "./scheduler.js";
-import { runTaskWorker } from "./workerRunner.js";
+import { cleanupSupervisorState } from "./supervisor.js";
+import { runTaskWorkerSafe } from "./workerRunner.js";
 import { runReducerPass } from "./reducer.js";
 import { createWorktree, listWorktreeSyncableChanges, syncWorktreeToRepo } from "../workspace/worktreeManager.js";
 import { defaultWorktreePath, scratchpadPath } from "../workspace/pathUtils.js";
@@ -20,12 +21,14 @@ import {
 } from "../runtime/taskRuntime.js";
 import { ensureGitRepo, ensureHeadCommit, defaultBranchName } from "../workspace/gitRepoManager.js";
 import { ALL_TOOL_NAMES } from "../tools/executeTool.js";
+import { cleanupTaskCommands } from "../tools/asyncCommandManager.js";
 import type { TaskControlAction, JobControlAction } from "../../shared/ipc.js";
 import type { ModelProviderName } from "../types/models.js";
 import { VerifierOutputSchema, WorkerPacketSchema } from "../types/taskState.js";
 import { canSafelyForkTask, classifyContractViolation, parseWorkerPacket, taskContract } from "../services/contractService.js";
 import { maybePersistReflection } from "../services/reflectionService.js";
 import { MAX_REPAIR_ATTEMPTS, shouldReplan } from "./replanPolicy.js";
+import { checkSpeculativeGroupCompletion, isSpeculativeCandidate, cleanupSpeculativeGroups, startSpeculativeGroup, type SpeculativeGroup } from "./bestOfN.js";
 
 const PATCH_TOOLS = ALL_TOOL_NAMES.filter((n) => !["remove_worktree", "create_worktree"].includes(n));
 
@@ -566,6 +569,13 @@ export class GristOrchestrator {
     const task = getTask(taskId);
     if (!task) return;
 
+    const specResult = checkSpeculativeGroupCompletion(taskId);
+    if (specResult.groupId && specResult.resolved) {
+      if (task.role === "implementer" && task.id !== specResult.winnerId && isSpeculativeCandidate(task.id)) {
+        return;
+      }
+    }
+
     if (task.role === "implementer" && task.status === "done") {
       const contractCheck = this.enforceCompletedTaskContract(task.id);
       if (!contractCheck.ok && contractCheck.severity === "major") {
@@ -680,7 +690,7 @@ export class GristOrchestrator {
           const p = (async () => {
             if (!this.ensureTaskWorkspace(taskId)) return;
             await this.bootstrapTaskRuntime(taskId);
-            await runTaskWorker(taskId, ac.signal, this.appWorkspaceRoot, (msg) => {
+            await runTaskWorkerSafe(taskId, ac.signal, this.appWorkspaceRoot, (msg) => {
               this.emit("duplicate_hint", jobId, taskId, { msg });
             }, (kind, jId, tId, data) => {
               this.emit(kind, jId, tId, data);
@@ -697,6 +707,7 @@ export class GristOrchestrator {
               updateTask(taskId, { status: "failed", blocker: String(e) });
             })
             .finally(() => {
+              cleanupTaskCommands(taskId);
               this.cleanupTaskRuntime(taskId);
               this.maybeSpawnRoleFollowups(taskId);
               this.aborts.delete(taskId);
@@ -803,6 +814,10 @@ export class GristOrchestrator {
     });
     this.emit("patch_spawned", jobId, id);
     return id;
+  }
+
+  speculate(jobId: number, goal: string, approaches: string[]): SpeculativeGroup {
+    return startSpeculativeGroup(jobId, goal, approaches, null, this.appWorkspaceRoot);
   }
 
   spawnVerifierTask(jobId: number, patchTaskId: number): number | null {
@@ -1021,6 +1036,8 @@ export class GristOrchestrator {
     }
     if (a.type === "stop_run") {
       this.stopScheduler(a.jobId);
+      cleanupSpeculativeGroups(a.jobId);
+      cleanupSupervisorState(a.jobId);
       updateJob(a.jobId, { status: "stopped" });
       for (const t of listTasksForJob(a.jobId)) {
         this.cleanupTaskRuntime(t.id);

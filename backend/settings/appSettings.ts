@@ -17,6 +17,8 @@ export interface AppSettings {
   /** Full command strings allowed for run_command_safe / run_tests */
   commandAllowlist?: string[];
   appWorkspaceRoot?: string;
+  /** Parallelism urgency: "low" | "normal" | "high" | "max" */
+  urgency?: string;
 }
 
 const DEFAULT_ALLOWLIST = [
@@ -60,6 +62,7 @@ export function loadAppSettings(): AppSettings {
         ? (all.commandAllowlist as string[])
         : DEFAULT_ALLOWLIST,
     appWorkspaceRoot: pick(all.appWorkspaceRoot as string | undefined, undefined),
+    urgency: pick(all.urgency as string | undefined, undefined),
   };
 }
 

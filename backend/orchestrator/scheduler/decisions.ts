@@ -1,5 +1,10 @@
 import { listArtifactsForTasks } from "../../db/artifactRepo.js";
 import type { TaskRow } from "../../db/taskRepo.js";
+import { computeMaxParallelWorkers } from "../parallelism.js";
+
+export function getMaxParallelWorkers(): number {
+  return computeMaxParallelWorkers();
+}
 
 export const MAX_PARALLEL_WORKERS = 4;
 const NON_SCHEDULABLE_KINDS = new Set(["root", "planner"]);

@@ -401,6 +401,42 @@ function GenericLine({ ev }: { ev: TaskEvent }) {
     );
   }
 
+  if (ev.type === "user_question") {
+    const qData = data as { question?: string; options?: string[]; context?: string; taskId?: number } | null;
+    const question = qData?.question || ev.message;
+    const options = qData?.options || [];
+    const context = qData?.context || "";
+    const qTaskId = qData?.taskId;
+    return (
+      <div className="my-2 rounded-lg border border-violet-500/40 bg-violet-900/10 px-4 py-3">
+        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-violet-400">Agent question</div>
+        <div className="text-sm text-gray-100">{question}</div>
+        {context && <div className="mt-1 text-xs text-gray-400">{context}</div>}
+        {options.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {options.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                className="rounded border border-violet-500/40 bg-violet-800/30 px-3 py-1 text-xs text-violet-200 hover:bg-violet-700/40"
+                onClick={() => {
+                  if (qTaskId != null) {
+                    void window.grist.sendTaskMessage(qTaskId, opt).then(() =>
+                      window.grist.taskControl({ type: "enqueue", taskId: qTaskId }),
+                    );
+                  }
+                }}
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+        )}
+        <span className="mt-1 block text-[10px] text-gray-600">{time}</span>
+      </div>
+    );
+  }
+
   if (ev.type === "task_done" || ev.type === "task_failed") {
     const ok = ev.type === "task_done";
     return (

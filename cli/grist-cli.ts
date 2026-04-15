@@ -12,7 +12,7 @@ import { loadAppSettings } from "../backend/settings/appSettings.js";
 import { GristOrchestrator } from "../backend/orchestrator/appOrchestrator.js";
 import { getJob, listJobs } from "../backend/db/jobRepo.js";
 import { listTasksForJob, getTask } from "../backend/db/taskRepo.js";
-import { listEventsForTask, listJobLevelEvents, listEvents, listErrorEvents, countEventsByType, listEventsByType, listEventsByTaskId } from "../backend/db/eventRepo.js";
+import { insertEvent, listEventsForTask, listJobLevelEvents, listEvents, listErrorEvents, countEventsByType, listEventsByType, listEventsByTaskId } from "../backend/db/eventRepo.js";
 import { createRootTask, listRootTasks, getRootTask, rootTaskToJobId, getChildTasks } from "../backend/db/rootTaskFacade.js";
 import {
   getFullMemoryData,

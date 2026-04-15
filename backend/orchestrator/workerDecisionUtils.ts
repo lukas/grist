@@ -7,7 +7,7 @@ export const WORKER_DECISION_JSON_SCHEMA: Record<string, unknown> = {
   properties: {
     decision: {
       type: "string",
-      enum: ["call_tool", "call_tools", "finish", "pause_self"],
+      enum: ["call_tool", "call_tools", "finish", "pause_self", "ask_user"],
     },
     reasoning_summary: { type: "string" },
     expected_information_gain: { type: "number" },
@@ -30,6 +30,14 @@ export const WORKER_DECISION_JSON_SCHEMA: Record<string, unknown> = {
       properties: {
         type: { type: "string" },
         content: {},
+      },
+    },
+    user_question: {
+      type: "object",
+      properties: {
+        question: { type: "string" },
+        options: { type: "array", items: { type: "string" } },
+        context: { type: "string" },
       },
     },
     task_state_update: {

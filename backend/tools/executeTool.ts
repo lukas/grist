@@ -8,7 +8,7 @@ import {
 } from "./repoTools.js";
 import { toolReadArtifacts, toolWriteArtifact } from "./artifactTools.js";
 import { toolAppendScratchpad, toolReadScratchpad, toolWriteScratchpad } from "./scratchpadTools.js";
-import { toolRunCommandSafe, toolRunLint, toolRunTests } from "./executionTools.js";
+import { toolRunCommandSafe, toolRunCommandBg, toolPollCommand, toolRunLint, toolRunTests } from "./executionTools.js";
 import {
   toolApplyPatch,
   toolCreateWorktree,
@@ -16,9 +16,10 @@ import {
   toolRemoveWorktree,
   toolWriteFile,
 } from "./patchTools.js";
-import { toolEmitProgress, toolPauseSelf } from "./controlTools.js";
+import { toolEmitProgress, toolPauseSelf, toolAskUser } from "./controlTools.js";
 import { toolWriteMemory, toolReadMemory } from "./memoryTools.js";
 import { toolListSkills, toolReadSkill } from "./skillTools.js";
+import { toolSpawnSubtask, toolPollSubtask } from "./subtaskTools.js";
 
 export async function executeTool(
   name: string,
@@ -57,6 +58,10 @@ export async function executeTool(
       return toolRunLint(ctx, args as { command?: string }, abortSignal);
     case "run_command_safe":
       return toolRunCommandSafe(ctx, args as { command: string; cwd?: string; timeoutMs?: number }, abortSignal);
+    case "run_command_bg":
+      return toolRunCommandBg(ctx, args as { command: string; cwd?: string; timeoutMs?: number });
+    case "poll_command":
+      return toolPollCommand(ctx, args as { command_id: string });
     case "create_worktree":
       return toolCreateWorktree(ctx, args as { baseRef: string; branchName: string; path?: string });
     case "write_file":
@@ -79,6 +84,12 @@ export async function executeTool(
       return toolListSkills(ctx, args as { scope?: "visible" | "global" | "project" | "all" });
     case "read_skill":
       return toolReadSkill(ctx, args as { skillId: string; scope?: "global" | "project"; file?: string });
+    case "ask_user":
+      return toolAskUser(ctx, args as { question: string; options?: string[]; context?: string });
+    case "spawn_subtask":
+      return toolSpawnSubtask(ctx, args as { goal: string; files?: string[]; approach?: string });
+    case "poll_subtask":
+      return toolPollSubtask(ctx, args as { subtask_id: number });
     default:
       return { ok: false, error: `Unknown tool: ${name}` };
   }
@@ -98,6 +109,8 @@ export const ALL_TOOL_NAMES = [
   "run_tests",
   "run_lint",
   "run_command_safe",
+  "run_command_bg",
+  "poll_command",
   "create_worktree",
   "write_file",
   "apply_patch",
@@ -109,4 +122,7 @@ export const ALL_TOOL_NAMES = [
   "read_memory",
   "list_skills",
   "read_skill",
+  "ask_user",
+  "spawn_subtask",
+  "poll_subtask",
 ] as const;

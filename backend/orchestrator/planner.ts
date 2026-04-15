@@ -23,6 +23,7 @@ import {
 } from "../types/taskState.js";
 import { normalizePlanContracts, validatePlanContracts } from "../services/contractService.js";
 import { getPlannerContext } from "../services/memoryService.js";
+import { startSpeculativeGroup } from "./bestOfN.js";
 
 const ANALYSIS_TOOLS = ALL_TOOL_NAMES.filter(
   (n) => !["write_file", "apply_patch", "create_worktree", "remove_worktree"].includes(n)
@@ -75,11 +76,11 @@ function buildPlannerPrompt(goal: string, operatorNotes: string, files: string[]
   const greenfieldGuidance = isEmpty
     ? `
 Empty-repo guidance:
-- Default to exactly one implementer for code-writing work.
-- Only create multiple implementers if the user already provided an explicit file/module split and each writer can succeed without relying on sibling branches being merged first.
-- Do NOT split bootstrap/config/entrypoint work across multiple implementers.
-- If you use a scout in a greenfield repo, keep it read-only and feed the single implementer.
-- Prefer one implementer that bootstraps the project and ships a runnable vertical slice.`
+- For simple tasks, default to one implementer that bootstraps and delivers a runnable vertical slice.
+- For tasks with clearly independent components (e.g., game logic, AI, CLI rendering), you CAN use multiple implementers IF you chain them with depends_on so the first creates the foundation and later ones build on it. The worktree from the first implementer is available to its dependents.
+- Do NOT create parallel implementers in an empty repo — they cannot see each other's files. Use sequential (depends_on) chains instead.
+- Do NOT split bootstrap/config/entrypoint work across multiple implementers — the first implementer should create the project structure.
+- If you use a scout in a greenfield repo, keep it read-only and feed the implementer.`
     : "";
   const system = `You are the MANAGER agent for Grist. You are the single source of truth for a coding swarm.
 Your job is to produce a compact, typed worker plan that:
@@ -102,6 +103,7 @@ Rules:
 - Prefer scout -> implementer for existing repos when reconnaissance materially reduces risk.
 - Prefer implementer -> verifier for code-writing work when a scoped test/check phase is useful.
 - End the plan with exactly one summarizer unless the task is trivial enough that a final summary would be redundant.
+- The scheduler dynamically allocates worker slots based on available CPU, memory, and urgency setting. The current max parallel workers is computed at runtime. You can plan more parallel tasks than the current limit — the scheduler will queue extras and launch them as slots free up.
 ${greenfieldGuidance}
 
 Output ONLY valid JSON matching this shape:
@@ -131,7 +133,8 @@ Output ONLY valid JSON matching this shape:
         "success_criteria": ["artifact or verification expectations"]
       },
       "max_steps": 20,
-      "depends_on": [0]
+      "depends_on": [0],
+      "speculative_approaches": ["approach A description", "approach B description"]
     }
   ]
 }
@@ -142,7 +145,8 @@ Requirements:
 - If two implementers would touch the same files, merge them into one task.
 - Scouts/reviewers should be read-only.
 - Verifiers should depend on the implementer they validate.
-- Summarizer should depend on all worker tasks it summarizes.`;
+- Summarizer should depend on all worker tasks it summarizes.
+- If a task could benefit from exploring multiple approaches in parallel (e.g., two different algorithms, two different UI frameworks), you can add a "speculative_approaches" array to that task. Grist will spawn one implementation per approach, verify each, and pick the best. Use this sparingly — only when approaches are genuinely different and the cost of trying both is worth the quality gain.`;
 
   const filesSummary = isEmpty
     ? "The repository is EMPTY (no files). This is a brand new project."
@@ -409,11 +413,12 @@ function validateParallelism(plan: ManagerPlan, goal: string, isEmpty: boolean, 
 
   if (isEmpty) {
     const implementers = adjusted.tasks.filter((t) => t.role === "implementer");
-    if (implementers.length > 1) {
+    const hasDependencyChain = implementers.some((t) => t.depends_on && t.depends_on.length > 0);
+    if (implementers.length > 1 && !hasDependencyChain) {
       const collapsed = ensureSummarizer(fallbackPlan(goal, true, fileCount));
       return {
         ...collapsed,
-        reasoning: `${collapsed.reasoning} [Collapsed ${implementers.length} greenfield implementers into one because isolated worktrees cannot rely on sibling code being merged first.]`,
+        reasoning: `${collapsed.reasoning} [Collapsed ${implementers.length} greenfield implementers into one because isolated worktrees cannot rely on sibling code being merged first. Tip: planner can use depends_on chains to allow sequential greenfield implementers.]`,
         accepted_assumptions: Array.from(
           new Set([...collapsed.accepted_assumptions, ...adjusted.accepted_assumptions])
         ),
@@ -697,6 +702,29 @@ export async function runPlanner(job: JobRow, appWorkspaceRoot: string): Promise
     const kind = roleToTaskKind(t.role);
     const deps = (t.depends_on || []).map((idx) => taskIds[idx]).filter((id) => id != null);
     const hasDeps = deps.length > 0;
+
+    if (t.speculative_approaches && t.speculative_approaches.length >= 2 && t.role === "implementer") {
+      const normalizedPacket = normalizeWorkerPacket(t.packet || {}, t.role);
+      const group = startSpeculativeGroup(job.id, t.goal, t.speculative_approaches, rootTaskId, appWorkspaceRoot, {
+        scope_json: JSON.stringify(normalizedPacket),
+        assigned_model_provider: defaultP,
+        allowed_tools_json: JSON.stringify(roleToAllowedTools(t.role)),
+        priority: plan.tasks.length - i,
+        max_steps: Math.max(20, t.max_steps || 20),
+        max_tokens: 200_000,
+        base_ref: "",
+      });
+      taskIds.push(group.candidateTaskIds[0]);
+      insertEvent({
+        job_id: job.id,
+        task_id: managerTaskId,
+        level: "info",
+        type: "speculative_group_planned",
+        message: `Spawned best-of-${t.speculative_approaches.length} speculative group for: ${t.goal.slice(0, 100)}`,
+        data_json: JSON.stringify({ groupId: group.groupId, candidateTaskIds: group.candidateTaskIds, approaches: t.speculative_approaches }),
+      });
+      continue;
+    }
 
     const id = insertTask({
       job_id: job.id,
